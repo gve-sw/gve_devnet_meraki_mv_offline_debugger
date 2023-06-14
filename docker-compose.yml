@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+
+  nginx:
+    container_name: nginx
+    restart: always
+    build: ./nginx
+    ports:
+      - 80:80
+    depends_on:
+      - flask_app
+
+  flask_app:
+    build: ./flask_app
+    container_name: flask_app
+    ports:
+      - 5000:5000
+    command: >
+      sh -c "rm sqlite.db &&
+             python db.py &&
+             python populate.py &&
+             gunicorn -w 4 'app:app' -b 0.0.0.0:5000"
+    volumes:
+      - ./flask_app:/app
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+
+  worker:
+    build: ./flask_app
+    container_name: celery-worker
+    user: nobody
+    command: celery -A app.celery worker --loglevel=info --logfile=logs/celery.log
+    volumes:
+      - ./flask_app:/app
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - flask_app
+      - redis
+
+  redis:
+    container_name: redis
+    image: redis:6-alpine
