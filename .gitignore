@@ -6,11 +6,11 @@ __pycache__/
 .idea/
 .DS_Store
 
-# Log files
-flask_app/logs/*
-
 # Local DB
 *.db
 
 # CSV Ticket Output File
 flask_app/*.csv
+
+# Debugging
+flask_app/sample_webhook.json

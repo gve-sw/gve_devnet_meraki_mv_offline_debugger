@@ -44,17 +44,23 @@ def create_connection(db_file):
 
 def create_tables(conn):
     """
-    Create Empty Tables (Routers, Switches, Cameras)
+    Create Empty Tables (Routers, Switches, Cameras, SNOW Tickets)
     :param conn: DB Connection Object
     :return:
     """
     c = conn.cursor()
+
+    # Delete table if it exists already
+    c.execute("DROP TABLE IF EXISTS routers")
 
     c.execute("""
               CREATE TABLE IF NOT EXISTS routers
               ([serial] TEXT PRIMARY KEY,
                [status] TEXT)
               """)
+
+    # Delete table if it exists already
+    c.execute("DROP TABLE IF EXISTS switches")
 
     c.execute("""
               CREATE TABLE IF NOT EXISTS switches
@@ -64,12 +70,24 @@ def create_tables(conn):
               FOREIGN KEY (connection) REFERENCES routers (serial))
               """)
 
+    # Delete table if it exists already
+    c.execute("DROP TABLE IF EXISTS cameras")
+
     c.execute("""
               CREATE TABLE IF NOT EXISTS cameras
               ([serial] TEXT PRIMARY KEY,
                [connection] TEXT,
                [status] TEXT,
               FOREIGN KEY (connection) REFERENCES switches (serial))
+              """)
+
+    # Delete table if it exists already
+    c.execute("DROP TABLE IF EXISTS snow_tickets")
+
+    c.execute("""
+              CREATE TABLE IF NOT EXISTS snow_tickets
+              ([serial] TEXT PRIMARY KEY,
+               [incident_sys_id] TEXT)
               """)
 
     conn.commit()
@@ -141,7 +159,7 @@ def query_router_status(conn, serial):
               (serial,))
     router_status = c.fetchall()
 
-    return router_status
+    return router_status if len(router_status) > 0 else None
 
 
 def query_switch_status(conn, serial):
@@ -159,7 +177,7 @@ def query_switch_status(conn, serial):
               (serial,))
     switch_status = c.fetchall()
 
-    return switch_status
+    return switch_status if len(switch_status) > 0 else None
 
 
 def query_camera_status(conn, serial):
@@ -177,7 +195,7 @@ def query_camera_status(conn, serial):
               (serial,))
     camera_status = c.fetchall()
 
-    return camera_status
+    return camera_status if len(camera_status) > 0 else None
 
 
 def query_switch_connection(conn, serial):
@@ -283,6 +301,22 @@ def query_specific_router(conn, serial):
     return router
 
 
+def query_specific_snow_ticket(conn, serial):
+    """
+    Return specific SNOW ticket associated with device serial number
+    :param conn: DB Connection object
+    :param serial: Device serial number
+    :return: SNOW Incident ID
+    """
+    c = conn.cursor()
+
+    c.execute("""SELECT incident_sys_id FROM snow_tickets WHERE serial = ?""", (serial,))
+
+    ticket = c.fetchall()
+
+    return ticket
+
+
 def query_connected_switches_to_router(conn, serial):
     """
     Return downstream switches connected to router
@@ -380,6 +414,37 @@ def add_camera(conn, serial, status, connection=None):
     conn.commit()
 
 
+def add_snow_ticket(conn, serial, incident_sys_id):
+    """
+    Add new SNOW ticket or update existing SNOW Ticket in DB
+    :param conn: DB Connection object
+    :param serial: Device serial number
+    :param incident_sys_id: SNOW Incident ID
+    :return:
+    """
+    c = conn.cursor()
+
+    c.execute("""INSERT OR REPLACE INTO snow_tickets (serial, incident_sys_id)
+              VALUES (?, ?)""", (serial, incident_sys_id))
+
+    conn.commit()
+
+
+def delete_snow_ticket(conn, serial):
+    """
+    Delete SNOW Ticket from DB
+    :param conn: DB Connection object
+    :param serial: Device serial number
+    :return:
+    """
+    c = conn.cursor()
+
+    c.execute("""DELETE from snow_tickets WHERE serial = ?""",
+              (serial,))
+
+    conn.commit()
+
+
 def close_connection(conn):
     """
     Close DB Connection
@@ -389,7 +454,8 @@ def close_connection(conn):
     conn.close()
 
 
-# if running this python file, create connection to database, create tables, and print out the results of queries of every table
+# if running this python file, create connection to database, create tables, and print out the results of queries of
+# every table
 if __name__ == "__main__":
     conn = create_connection("sqlite.db")
     create_tables(conn)
