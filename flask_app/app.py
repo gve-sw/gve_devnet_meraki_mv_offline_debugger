@@ -378,7 +378,7 @@ def log_ticket_information(ticket_data, webhook_data):
     with open(config.TICKET_CSV_PATH, 'a') as csvfile:
         fieldnames = ['Timestamp', 'Alert Type', 'Network', 'Affected Device Type', 'Affected Device Name',
                       'Affected Device Serial', 'Impacted Camera Name(s)', 'Impacted Camera Serial(s)',
-                      'Upstream Switch Serial', 'Upstream Switch Name', 'Upstream Switch Port']
+                      'Upstream Switch Serial', 'Upstream Switch Name', 'Upstream Switch Port', 'Switch Port Warnings', 'Switch Port Errors']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
         # Add header if file doesn't exist
@@ -592,6 +592,7 @@ def meraki_alert():
 
         elif data["alertType"] == "Camera may have critical hardware failure":
             # Camera has critical hardware failure
+            org_id = data['organizationId']
             serial = data["deviceSerial"]
             network_id = data['networkId']
 
@@ -599,38 +600,25 @@ def meraki_alert():
             camera_status = db.query_camera_status(conn, serial)
 
             if camera_status:
-                # Create log file, create customer logger instance
-                run_stamp(serial)
-                l = custom_logger(serial)
-
-                # Get topology information, determine the switch the camera was connected too
-                l.info(f'Finding connected switch serial and port from topology...')
+                # Now we need to check to see if the Camera connection is also down before we create a ticket
                 connection = db.query_camera_connection(conn, serial)
                 switch_serial = connection[0][0]
 
-                switch_port, api_error = find_switchport(network_id, serial)
+                # Check if a ticket already exists for the Camera (from critical hardware failure, or another
+                # ticket)
+                ticket = db.query_specific_snow_ticket(conn, serial)
 
-                # If no port found
-                if not switch_port:
-                    if api_error:
-                        l.error(f'- Unable to find connected switch port, API error: {api_error}')
-                    else:
-                        l.error(f'- Unable to find connected switch port, no port found')
-
-                    errors, warnings = None, None
+                if config.DUPLICATE_TICKETS and len(ticket) > 0:
+                    console.print(
+                        f"No ticket created for the Camera, existing SNOW ticket present: {ticket[0][0]}")
                 else:
-                    l.info(
-                        f'- Found Camera is connected to switch serial: {switch_serial} on port: {switch_port}')
+                    # Pass processing off to celery worker
+                    console.print(f'Passing processing to [green]celery worker[/]...')
 
-                    # Collect any error and warning data from switchport (over the time we've been waiting)
-                    errors, warnings = find_switchport_status(switch_serial, switch_port)
-
-                processing_data = {'switch_serial': switch_serial, "switch_port": switch_port, "api_error": api_error,
-                                   "switch_port_status": {"errors": errors, "warnings": warnings}}
-
-                # Log ticket information, create ServiceNow ticket
-                create_service_now_ticket.delay(processing_data, data)
-                console.print("Ticket created for the Camera critical hardware failure")
+                    # Build chain of celery tasks, once main debug loop complete, write results to csv file,
+                    # create SNOW ticket
+                    chain(debug_mv_camera.s(org_id, network_id, serial, data['deviceName'], switch_serial),
+                          create_service_now_ticket.s(data)).apply_async()
 
         elif data["alertType"] == "switches went down":
             serial = data["deviceSerial"]

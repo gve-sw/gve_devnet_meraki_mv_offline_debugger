@@ -54,20 +54,27 @@ def main():
         # Optional: filter out the specific networks from the list
         if len(config.TARGET_NETWORKS) > 0:
             networks = [entry for entry in networks if entry['name'] in config.TARGET_NETWORKS]
+            networks_ids = [entry['id'] for entry in networks if entry['name'] in config.TARGET_NETWORKS]
 
             # No matching networks in org found, skip
             if len(networks) == 0:
                 continue
 
         # Get Org Devices, build mac to serial dictionary
-        devices = dashboard.organizations.getOrganizationDevices(org_id, total_pages='all')
+        if len(config.TARGET_NETWORKS) > 0:
+            devices = dashboard.organizations.getOrganizationDevices(org_id, total_pages='all', networkIds=networks_ids)
+        else:
+            devices = dashboard.organizations.getOrganizationDevices(org_id, total_pages='all')
 
         mac_to_serial = {}
         for device in devices:
             mac_to_serial[device["mac"]] = device["serial"]
 
         # Get Org Device Statuses, build serial to status dictionary
-        device_statuses = dashboard.organizations.getOrganizationDevicesStatuses(org_id)
+        if len(config.TARGET_NETWORKS) > 0:
+            device_statuses = dashboard.organizations.getOrganizationDevicesStatuses(org_id, total_pages='all', networkIds=networks_ids)
+        else:
+            device_statuses = dashboard.organizations.getOrganizationDevicesStatuses(org_id, total_pages='all')
 
         serial_to_status = {}
         for status in device_statuses:
