@@ -48,7 +48,7 @@ celery.conf.worker_hijack_root_logger = False
 dashboard = meraki.DashboardAPI(api_key=config.MERAKI_API_KEY, suppress_logging=True, maximum_retries=5)
 
 # Global Variables
-DELAY_TIME = 5  # time to wait (minute) between polls
+DELAY_TIME = 5  # time to wait (minute) between polls (a value of 0 skips sleeping)
 
 # Rich Console Instance
 console = Console()
@@ -97,31 +97,35 @@ def run_stamp(serial):
         fp.write(f'**************************** Time Stamp: {datetime.datetime.now()} ****************************\n')
 
 
-def find_switchport(network_id, serial):
+def find_switchport(switch_serial, camera_mac):
     """
     Find switch-port on connected switch that the camera is connected to, supports same or cross network
-    :param network_id: Webhook network id
-    :param serial: Camera serial, used to identify correct link in topology
+    :param switch_serial: Switch Serial, used for checking port CDP/LLDP information
+    :param camera_mac: Camera MAC address (mapped to camera on port)
     :return: Port number of camera switch port, API error encountered (if relevant)
     """
     # Get Network topology (link layer) information
     try:
-        response = dashboard.networks.getNetworkTopologyLinkLayer(network_id)
+        ports = dashboard.switch.getDeviceSwitchPortsStatuses(switch_serial)
     except Exception as e:
         # All exceptions (invalid network, etc.) are bubbled up
         return None, str(e)
 
-    # Check all reported links and ends to find the right link (camera -> switch)
-    for link in response['links']:
-        for end in link['ends']:
-            if 'device' in end and end['device']['serial'] == serial:
-                # Found the right link, return switch serial (by lldp or cdp depending on what's not null)
-                if end['discovered']['lldp']:
-                    return end['discovered']['lldp']['portId'].strip('Port '), None
-                elif end['discovered']['cdp']:
-                    return end['discovered']['cdp']['portId'].strip('Port '), None
-                else:
-                    return None, None
+    # Iterate through ports, if the port is enabled and has cdp or lldp information (match the mac - this determines
+    # port)
+    for port in ports:
+        # Check lldp
+        if 'lldp' in port and 'chassisId' in port['lldp']:
+            if port['lldp']['chassisId'] == camera_mac:
+                # we found it!
+                return port['portId'], None
+        # Check cdp
+        elif 'cdp' in port and 'deviceId' in port['cdp']:
+            # need to translate mac to appropriate format (api returns mac with now ':')
+            converted_camera_mac = camera_mac.replace(":", "")
+            if port['cdp']['deviceId'] == converted_camera_mac:
+                # we found it!
+                return port['portId'], None
 
     return None, None
 
@@ -134,27 +138,24 @@ def find_switchport_status(switch_serial, switch_port):
     :return: Errors, Warnings
     """
     # Collect any error and warning data from switchport (over the time we've been waiting)
-    port_statuses = dashboard.switch.getDeviceSwitchPortsStatuses(switch_serial, timespan=60 * DELAY_TIME)
+    port_statuses = dashboard.switch.getDeviceSwitchPortsStatuses(switch_serial)
 
     # Identify statuses of correct port
-    target_port = None
     for port_status in port_statuses:
         if 'portId' in port_status and port_status['portId'] == switch_port:
             target_port = port_status
 
-    if target_port:
-        # Return any states errors or warnings on port
-        return target_port['errors'], target_port['warnings']
+            # Return any states errors or warnings on port
+            return target_port['errors'], target_port['warnings']
 
     return None, None
 
 
 @celery.task
-def debug_mv_camera(org_id, network_id, serial, camera_name, switch_serial):
+def debug_mv_camera(org_id, serial, camera_name, switch_serial):
     """
     Trigger primary debugging workflow for MV camera, the steps are outlined in the README
     :param org_id: Org ID
-    :param network_id: Camera network ID
     :param serial: Camera serial
     :param camera_name: Camera name
     :param switch_serial: Connected switch serial
@@ -173,6 +174,7 @@ def debug_mv_camera(org_id, network_id, serial, camera_name, switch_serial):
     response = dashboard.organizations.getOrganizationDevicesStatuses(org_id, serials=[serial])
 
     status = response[0]['status']
+    camera_mac = response[0]['mac']
     # If camera is online, stop further processing
     if status == 'online':
         l.info(f'- Camera is back online!')
@@ -183,7 +185,7 @@ def debug_mv_camera(org_id, network_id, serial, camera_name, switch_serial):
 
     # Get topology information, determine the switch the camera was connected too
     l.info(f'Finding connected switch serial and port from topology...')
-    switch_port, api_error = find_switchport(network_id, serial)
+    switch_port, api_error = find_switchport(switch_serial, camera_mac)
 
     # If no port found, return
     if not switch_port:
@@ -524,7 +526,6 @@ def meraki_alert():
     The webhooks will send information to this web server, and this function
     provides the logic to parse the Meraki alert
     """
-
     # If the method is POST, then an alert has sent a webhook to the web server
     if request.method == "POST":
         console.print(Panel.fit("Webhook Alert Detected:"))
@@ -540,18 +541,12 @@ def meraki_alert():
             console.print("[red]Webhook ignored, network name not present in target networks list....ignoring[/]")
             return 'Webhook ignored, network not present in whitelist - check the terminal for more information'
 
-        # Debugging:
-        # with open("sample_webhook.json") as f:
-        #     data = json.load(f)
-        #     data = json.load(f)
-
         # The database holds information about the status of the Meraki devices and the topology of the network
         conn = db.create_connection("sqlite.db")
 
         if data["alertType"] == "cameras went down":
             # Extract variables from webhook
             org_id = data['organizationId']
-            network_id = data['networkId']
             serial = data['deviceSerial']
 
             # check what the camera status is
@@ -584,7 +579,7 @@ def meraki_alert():
 
                         # Build chain of celery tasks, once main debug loop complete, write results to csv file,
                         # create SNOW ticket
-                        chain(debug_mv_camera.s(org_id, network_id, serial, data['deviceName'], switch_serial),
+                        chain(debug_mv_camera.s(org_id, serial, data['deviceName'], switch_serial),
                               create_service_now_ticket.s(data)).apply_async()
 
                 else:
@@ -594,7 +589,6 @@ def meraki_alert():
             # Camera has critical hardware failure
             org_id = data['organizationId']
             serial = data["deviceSerial"]
-            network_id = data['networkId']
 
             # Check if camera is in DB
             camera_status = db.query_camera_status(conn, serial)
@@ -617,7 +611,7 @@ def meraki_alert():
 
                     # Build chain of celery tasks, once main debug loop complete, write results to csv file,
                     # create SNOW ticket
-                    chain(debug_mv_camera.s(org_id, network_id, serial, data['deviceName'], switch_serial),
+                    chain(debug_mv_camera.s(org_id, serial, data['deviceName'], switch_serial),
                           create_service_now_ticket.s(data)).apply_async()
 
         elif data["alertType"] == "switches went down":
