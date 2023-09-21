@@ -515,7 +515,8 @@ def create_service_now_ticket(processing_data, webhook_data):
             l.error(f'Failed to create Service Now Ticket: {response.text}')
 
     # Log ticket data to CSV as well
-    log_ticket_information(ticket_data, webhook_data)
+    if ticket_data:
+        log_ticket_information(ticket_data, webhook_data)
 
     db.close_connection(conn)
 
