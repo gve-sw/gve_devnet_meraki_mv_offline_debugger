@@ -27,9 +27,10 @@ from logging.handlers import RotatingFileHandler
 
 import meraki
 import requests
-from celery import Celery, chain
-from flask import Flask, request
 from apscheduler.schedulers.background import BackgroundScheduler
+from celery import Celery, chain
+from dotenv import load_dotenv
+from flask import Flask, request
 from rich.console import Console
 from rich.panel import Panel
 
@@ -44,8 +45,16 @@ celery.conf.broker_url = os.environ.get("CELERY_BROKER_URL", "redis://localhost:
 celery.conf.result_backend = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379")
 celery.conf.worker_hijack_root_logger = False
 
+# Load in Environment Variables
+load_dotenv()
+MERAKI_API_KEY = os.getenv('MERAKI_API_KEY')
+SHARED_SECRET = os.getenv('SHARED_SECRET')
+SERVICENOW_INSTANCE = os.getenv('SERVICENOW_INSTANCE')
+SERVICENOW_USERNAME = os.getenv('SERVICENOW_USERNAME')
+SERVICENOW_PASSWORD = os.getenv('SERVICENOW_PASSWORD')
+
 # Meraki Dashboard Instance
-dashboard = meraki.DashboardAPI(api_key=config.MERAKI_API_KEY, suppress_logging=True, maximum_retries=5)
+dashboard = meraki.DashboardAPI(api_key=MERAKI_API_KEY, suppress_logging=True, maximum_retries=5)
 
 # Global Variables
 DELAY_TIME = 5  # time to wait (minute) between polls (a value of 0 skips sleeping)
@@ -380,7 +389,8 @@ def log_ticket_information(ticket_data, webhook_data):
     with open(config.TICKET_CSV_PATH, 'a') as csvfile:
         fieldnames = ['Timestamp', 'Alert Type', 'Network', 'Affected Device Type', 'Affected Device Name',
                       'Affected Device Serial', 'Impacted Camera Name(s)', 'Impacted Camera Serial(s)',
-                      'Upstream Switch Serial', 'Upstream Switch Name', 'Upstream Switch Port', 'Switch Port Warnings', 'Switch Port Errors']
+                      'Upstream Switch Serial', 'Upstream Switch Name', 'Upstream Switch Port', 'Switch Port Warnings',
+                      'Switch Port Errors']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
         # Add header if file doesn't exist
@@ -408,10 +418,10 @@ def service_now_ticket_cleanup(org_id, serial, snow_sys_id):
     # If camera is offline, stop cleanup of tickets
     if status == 'online':
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        auth = (config.SERVICENOW_USERNAME, config.SERVICENOW_PASSWORD)
+        auth = (SERVICENOW_USERNAME, SERVICENOW_PASSWORD)
 
         # Check if ticket exits and isn't resolved
-        response = requests.get(config.SERVICENOW_INSTANCE + f"/api/now/table/incident", auth=auth,
+        response = requests.get(SERVICENOW_INSTANCE + f"/api/now/table/incident", auth=auth,
                                 params={'sys_id': snow_sys_id},
                                 headers=headers)
 
@@ -424,7 +434,7 @@ def service_now_ticket_cleanup(org_id, serial, snow_sys_id):
 
                 # Get ServiceNow caller
                 servicenow_caller = requests.get(
-                    config.SERVICENOW_INSTANCE + "/api/now/table/sys_user?sysparm_query=user_name%3D" + config.SERVICENOW_USERNAME,
+                    SERVICENOW_INSTANCE + "/api/now/table/sys_user?sysparm_query=user_name%3D" + SERVICENOW_USERNAME,
                     auth=auth, headers=headers).json()['result'][0]['name']
 
                 # Set SNOW Ticket to resolved, add automated comment
@@ -434,7 +444,7 @@ def service_now_ticket_cleanup(org_id, serial, snow_sys_id):
                     "comments": "This Ticket has been Automatically Marked Resolved, the underlying device has been "
                                 f"online for {TICKET_REMOVAL_TIME} + Hours. "
                 }
-                response = requests.put(config.SERVICENOW_INSTANCE + f"/api/now/table/incident/{snow_sys_id}",
+                response = requests.put(SERVICENOW_INSTANCE + f"/api/now/table/incident/{snow_sys_id}",
                                         auth=auth,
                                         headers=headers, json=updated_ticket)
 
@@ -467,11 +477,11 @@ def create_service_now_ticket(processing_data, webhook_data):
         l.info(f'Creating Service Now Ticket for: {webhook_data}')
 
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        auth = (config.SERVICENOW_USERNAME, config.SERVICENOW_PASSWORD)
+        auth = (SERVICENOW_USERNAME, SERVICENOW_PASSWORD)
 
         # Get ServiceNow caller
         servicenow_caller = requests.get(
-            config.SERVICENOW_INSTANCE + "/api/now/table/sys_user?sysparm_query=user_name%3D" + config.SERVICENOW_USERNAME,
+            SERVICENOW_INSTANCE + "/api/now/table/sys_user?sysparm_query=user_name%3D" + SERVICENOW_USERNAME,
             auth=auth, headers=headers).json()['result'][0]['name']
 
         # Set Impact and Urgency based on type of alert
@@ -502,7 +512,7 @@ def create_service_now_ticket(processing_data, webhook_data):
         }
 
         # Create new ServiceNow Ticket
-        response = requests.post(config.SERVICENOW_INSTANCE + "/api/now/table/incident", auth=auth, headers=headers,
+        response = requests.post(SERVICENOW_INSTANCE + "/api/now/table/incident", auth=auth, headers=headers,
                                  json=ticket)
 
         if response.ok:
@@ -534,7 +544,7 @@ def meraki_alert():
         console.print(data)
 
         # Shared Secret Check
-        if data['sharedSecret'] != config.SHARED_SECRET:
+        if data['sharedSecret'] != SHARED_SECRET:
             console.print("[red]Error, shared secret doesn't match configured shared secret... ignoring[/]")
 
         # Optional: filter for specific network

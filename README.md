@@ -71,7 +71,7 @@ replacing [yourtoken] with the authtoken you copied in Step 2.
 ngrok http 80
 ```
 
-**Note:** It's recommend to use port 443 for secure communication (if not using Ngrok). Refer to this [guide](https://faun.pub/setting-up-ssl-certificates-for-nginx-in-docker-environ-e7eec5ebb418) to see how to enable SSL on Nginx.
+**Note:** It's recommend to use port 443 for secure communication (if not using Ngrok). Refer to this [guide](https://mindsers.blog/en/post/https-using-nginx-certbot-docker/) to see how to enable SSL on Nginx (in docker) using Let's Encrypt. Change the relevant sections of `docker-compose.yml` and the `nginx/conf/default.conf` based on the guide.
 
 #### Meraki Alerts
 In order to generate webhooks for the Meraki Alerts this code is written to create tickets for, follow these steps:
@@ -109,20 +109,33 @@ This feature stops duplicate tickets from being created for an MV Camera with an
 
 ## Installation/Configuration
 1. Clone this repository with `git clone [repository name]`
-2. Add Meraki API key, and CSV File Path for Ticket information, and Webhook Shared Secret to environment variables in `flask_app/config.py`. The CSV File is a backup of ticket information for manual ServiceNow ticket creation.
+2. Rename the `.env_sample` file to `.env`. This file holds sensitive environment variables which will be passed to the docker container securely.
+2. Add Meraki API key and Webhook Shared Secret  (`.env`), and CSV File Path for Ticket information (`flask_app/config.py`) to environment variables. The CSV File is a backup of ticket information for manual ServiceNow ticket creation.
 ```python
-MERAKI_API_KEY = ""
+# config.py
 TICKET_CSV_PATH = ""
-SHARED_SECRET = ""
 ```
-3. Enable ServiceNow (Default = True), add ServiceNow instance variables to `flask_app/config.py` obtained from the prerequisites section.
 ```python
-SERVICE_NOW_ENABLED = True
-SERVICENOW_INSTANCE = ""
-SERVICENOW_USERNAME = ""
-SERVICENOW_PASSWORD = ""
+# .env
+MERAKI_API_KEY="<replace>"
+SHARED_SECRET="<replace>"
+
+# Example: MERAKI_API_KEY="1234567890"
 ```
-4. Enable or Disable the ServiceNow 'Ticket Cleanup' and/or the 'Duplicate Ticket Prevention' feature.
+3. Enable ServiceNow (Default = True) (`flask_app/config.py`), add ServiceNow instance variables (`.env`) obtained from the prerequisites section.
+```python
+# config.py
+SERVICE_NOW_ENABLED = True
+```
+```python
+# .env
+SERVICENOW_INSTANCE="<replace>"
+SERVICENOW_USERNAME="<replace>"
+SERVICENOW_PASSWORD="<replace>"
+
+# Example: SERVICENOW_INSTANCE="https://example.com"
+```
+4. Enable or Disable the ServiceNow 'Ticket Cleanup' and/or the 'Duplicate Ticket Prevention' feature (`flask_app/config.py`).
 ```python
 TICKET_CLEANUP = False
 DUPLICATE_TICKETS = True

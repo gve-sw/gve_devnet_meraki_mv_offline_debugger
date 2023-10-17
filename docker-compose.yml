@@ -4,12 +4,24 @@ services:
 
   nginx:
     container_name: nginx
+    image: nginx:latest
     restart: always
-    build: ./nginx
     ports:
       - 80:80
+#      - 443:443
     depends_on:
       - flask_app
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf/:/etc/nginx/conf.d/:ro
+#      - ./certbot/www:/var/www/certbot/:ro
+#      - ./certbot/conf/:/etc/nginx/ssl/:ro
+
+#  certbot:
+#    image: certbot/certbot:latest
+#    volumes:
+#      - ./certbot/www/:/var/www/certbot/:rw
+#      - ./certbot/conf/:/etc/letsencrypt/:rw
 
   flask_app:
     build: ./flask_app
@@ -25,19 +37,28 @@ services:
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - MERAKI_API_KEY=${MERAKI_API_KEY}
+      - SHARED_SECRET=${SHARED_SECRET}
+      - SERVICENOW_INSTANCE=${SERVICENOW_INSTANCE}
+      - SERVICENOW_USERNAME=${SERVICENOW_USERNAME}
+      - SERVICENOW_PASSWORD=${SERVICENOW_PASSWORD}
     depends_on:
       - redis
 
   worker:
     build: ./flask_app
     container_name: celery-worker
-    user: nobody
     command: celery -A app.celery worker --loglevel=info --logfile=logs/celery.log
     volumes:
       - ./flask_app:/app
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - MERAKI_API_KEY=${MERAKI_API_KEY}
+      - SHARED_SECRET=${SHARED_SECRET}
+      - SERVICENOW_INSTANCE=${SERVICENOW_INSTANCE}
+      - SERVICENOW_USERNAME=${SERVICENOW_USERNAME}
+      - SERVICENOW_PASSWORD=${SERVICENOW_PASSWORD}
     depends_on:
       - flask_app
       - redis

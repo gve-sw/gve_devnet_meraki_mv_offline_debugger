@@ -6,6 +6,8 @@ __pycache__/
 .idea/
 .DS_Store
 
+.env
+
 # Local DB
 *.db
 

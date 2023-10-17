@@ -17,10 +17,12 @@ __author__ = "Trevor Maco <tmaco@cisco.com>"
 __copyright__ = "Copyright (c) 2023 Cisco and/or its affiliates."
 __license__ = "Cisco Sample Code License, Version 1.1"
 
+import os
 from pprint import pprint
 from rich.console import Console
 from rich.progress import Progress
 from rich.panel import Panel
+from dotenv import load_dotenv
 
 import meraki
 
@@ -30,8 +32,13 @@ import db
 # Rich Console Instance
 console = Console()
 
+# Load in Environment Variables
+load_dotenv()
+MERAKI_API_KEY = os.getenv('MERAKI_API_KEY')
+
+
 # connect to Meraki dashboard
-dashboard = meraki.DashboardAPI(config.MERAKI_API_KEY, suppress_logging=True, maximum_retries=25)
+dashboard = meraki.DashboardAPI(MERAKI_API_KEY, suppress_logging=True, maximum_retries=25)
 
 
 def main():

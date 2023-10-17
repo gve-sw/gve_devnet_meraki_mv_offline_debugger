@@ -1,13 +1,8 @@
 # Meraki API Configs
-MERAKI_API_KEY = ""
 TICKET_CSV_PATH = ""
-SHARED_SECRET = ""
 
 # ServiceNow Section
 SERVICE_NOW_ENABLED = True
-SERVICENOW_INSTANCE = ""
-SERVICENOW_USERNAME = ""
-SERVICENOW_PASSWORD = ""
 
 # Additional ServiceNow Ticket Features
 TICKET_CLEANUP = False
