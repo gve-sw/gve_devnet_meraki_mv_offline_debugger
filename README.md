@@ -109,8 +109,8 @@ This feature stops duplicate tickets from being created for an MV Camera with an
 
 ## Installation/Configuration
 1. Clone this repository with `git clone [repository name]`
-2. Rename the `.env_sample` file to `.env`. This file holds sensitive environment variables which will be passed to the docker container securely.
-2. Add Meraki API key and Webhook Shared Secret  (`.env`), and CSV File Path for Ticket information (`flask_app/config.py`) to environment variables. The CSV File is a backup of ticket information for manual ServiceNow ticket creation.
+2. Rename the `.env_sample` file to `.env`. This file holds sensitive environment variables which will be passed to the docker container securely. Rename `config_sample.py` to `config.py` (located at: `flask_app/config_sample.py`).
+3. Add Meraki API key and Webhook Shared Secret  (`.env`), and CSV File Path for Ticket information (`flask_app/config.py`) to environment variables. The CSV File is a backup of ticket information for manual ServiceNow ticket creation.
 ```python
 # config.py
 TICKET_CSV_PATH = ""
@@ -122,7 +122,7 @@ SHARED_SECRET="<replace>"
 
 # Example: MERAKI_API_KEY="1234567890"
 ```
-3. Enable ServiceNow (Default = True) (`flask_app/config.py`), add ServiceNow instance variables (`.env`) obtained from the prerequisites section.
+4. Enable ServiceNow (Default = True) (`flask_app/config.py`), add ServiceNow instance variables (`.env`) obtained from the prerequisites section.
 ```python
 # config.py
 SERVICE_NOW_ENABLED = True
@@ -135,13 +135,13 @@ SERVICENOW_PASSWORD="<replace>"
 
 # Example: SERVICENOW_INSTANCE="https://example.com"
 ```
-4. Enable or Disable the ServiceNow 'Ticket Cleanup' and/or the 'Duplicate Ticket Prevention' feature (`flask_app/config.py`).
+5. Enable or Disable the ServiceNow 'Ticket Cleanup' and/or the 'Duplicate Ticket Prevention' feature (`flask_app/config.py`).
 ```python
 TICKET_CLEANUP = False
 DUPLICATE_TICKETS = True
 ```
-5. Set up a Python virtual environment. Make sure Python 3 is installed in your environment, and if not, you may download Python [here](https://www.python.org/downloads/). Once Python 3 is installed in your environment, you can activate the virtual environment with the instructions found [here](https://docs.python.org/3/tutorial/venv.html).
-6. Install the requirements with `pip3 install -r flask_app/requirements.txt`
+6. Set up a Python virtual environment. Make sure Python 3 is installed in your environment, and if not, you may download Python [here](https://www.python.org/downloads/). Once Python 3 is installed in your environment, you can activate the virtual environment with the instructions found [here](https://docs.python.org/3/tutorial/venv.html).
+7. Install the requirements with `pip3 install -r flask_app/requirements.txt`
 
 ## Usage
 To run the program, use the docker command:

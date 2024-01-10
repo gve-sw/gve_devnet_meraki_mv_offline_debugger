@@ -20,7 +20,6 @@ __license__ = "Cisco Sample Code License, Version 1.1"
 import os
 from pprint import pprint
 from rich.console import Console
-from rich.progress import Progress
 from rich.panel import Panel
 from dotenv import load_dotenv
 
@@ -28,6 +27,7 @@ import meraki
 
 import config
 import db
+import threading
 
 # Rich Console Instance
 console = Console()
@@ -41,15 +41,152 @@ MERAKI_API_KEY = os.getenv('MERAKI_API_KEY')
 dashboard = meraki.DashboardAPI(MERAKI_API_KEY, suppress_logging=True, maximum_retries=25)
 
 
-def main():
+def thread_wrapper(net, mac_to_serial, serial_to_model, serial_to_status):
+    """
+    Thread for processing the topology of each network (devices, links, connections, etc.).
+    If a valid topological connection is found, add it to the DB.
+    :param net: Current Network
+    :param mac_to_serial: Org Wide Device Mac to Serial Mapping
+    :param serial_to_model: Org Wide Device Serials to Meraki Model Mapping
+    :param serial_to_status: Org Wide Device Serial to Device Status Mapping
+    :return: Add Valid Mappings to DB (no return)
+    """
     # connect to database
     conn = db.create_connection("sqlite.db")
 
+    net_id = net['id']
+
+    # grab the network topology from Meraki dashboard to determine which devices are connected to each other
+    try:
+        topology = dashboard.networks.getNetworkTopologyLinkLayer(net_id)
+    except Exception as e:
+        # All exceptions (invalid network, etc. are skipped)
+        return
+
+    # Build Derived ID to MAC Dictionary
+    derived_id_to_mac = {}
+    for node in topology['nodes']:
+        if 'mac' in node:
+            derived_id_to_mac[node['derivedId']] = node['mac']
+
+    links = topology["links"]
+
+    connections = []
+    for link in links:
+        serials = []
+
+        ends = link["ends"]
+        for end in ends:
+            if end["node"]["type"] == "device":
+                device = end["device"]
+                serial = device["serial"]
+                serials.append({"serial": serial})
+            elif end["node"]["type"] == "discovered":
+                # Handle cross network topology case
+
+                # Check nodes list to see if there's an entry based on derivedId
+                derivedId = end["node"]['derivedId']
+
+                if derivedId in derived_id_to_mac:
+                    mac = derived_id_to_mac[derivedId]
+                    if mac in mac_to_serial:
+                        serial = mac_to_serial[mac]
+                        serials.append({"serial": serial})
+
+        connections.append(serials)
+
+    processed_connections = []
+    for connection in connections:
+        for node in connection:
+            if node["serial"] in serial_to_model:
+                model = serial_to_model[node['serial']]
+
+                if "MV" in model:
+                    node["type"] = "camera"
+                elif "MS" in model:
+                    node["type"] = "switch"
+                elif "MX" in model:
+                    node["type"] = "router"
+                else:
+                    node["type"] = "N/A"
+            else:
+                node["type"] = "N/A"
+
+            # Get status to determine what to initialize database
+            device_status = serial_to_status[node["serial"]]
+            if device_status == "online" or device_status == "alerting":
+                node["status"] = "up"
+            else:
+                node["status"] = "down"
+
+        if len(connection) > 1:
+            device_types = {connection[0]["type"], connection[1]["type"]}
+
+            if "camera" in device_types and "switch" in device_types:
+                processed_connections.append(connection)
+                # check if the first connection is a switch
+                if connection[0]["type"] == "switch":
+                    # check if switch already exists in the database
+                    data = db.query_specific_switch(conn, connection[0]["serial"])
+                    if len(data) == 0:
+                        # if switch not already in the database, add it
+                        db.add_switch(conn, connection[0]["serial"],
+                                      connection[0]["status"])
+
+                    # now add the camera into the database
+                    db.add_camera(conn, connection[1]["serial"],
+                                  connection[1]["status"], connection[0]["serial"])
+                # the first connection is not a switch, so it must be a camera
+                else:
+                    # check if switch already exists in the database
+                    data = db.query_specific_switch(conn, connection[1]["serial"])
+                    if len(data) == 0:
+                        # add switch to database
+                        db.add_switch(conn, connection[1]["serial"],
+                                      connection[1]["status"])
+
+                    # now add the camera to the database
+                    db.add_camera(conn, connection[0]["serial"],
+                                  connection[0]["status"], connection[1]["serial"])
+            elif "switch" in device_types and "router" in device_types:
+                processed_connections.append(connection)
+                # check if first connection is a router
+                if connection[0]["type"] == "router":
+                    # check if router already exists in the database
+                    data = db.query_specific_router(conn, connection[0]["serial"])
+                    if len(data) == 0:
+                        # router is not in database, so it must be added
+                        db.add_router(conn, connection[0]["serial"],
+                                      connection[0]["status"])
+
+                    # now add switch into the database
+                    db.add_switch(conn, connection[1]["serial"],
+                                  connection[1]["status"], connection[0]["serial"])
+                # the first connection is not a router, so it must be a switch
+                else:
+                    # check if router already exists in database
+                    data = db.query_specific_router(conn, connection[1]["serial"])
+                    if len(data) == 0:
+                        # router is not in database and needs to be added
+                        db.add_router(conn, connection[1]["serial"],
+                                      connection[1]["status"])
+
+                    # now add switch into database
+                    db.add_switch(conn, connection[0]["serial"],
+                                  connection[0]["status"], connection[1]["serial"])
+
+    # Display Results of Processing Network at the end of the thread
+    console.print("\nProcessed Network: [blue]'{}'[/]".format(net['name']))
+    console.print(f"Processed the following connection(s): {processed_connections}")
+
+
+def main():
     # Iterate through every org, every network, build topology information
     console.print(Panel.fit("Building Topology Table:"))
 
     orgs = dashboard.organizations.getOrganizations()
     for org in orgs:
+        console.print(Panel.fit(f"Processing Org: {org['name']}"))
         org_id = org["id"]
 
         # get net id for net name in environment variables
@@ -67,15 +204,17 @@ def main():
             if len(networks) == 0:
                 continue
 
-        # Get Org Devices, build mac to serial dictionary
+        # Get Org Devices, build mac to serial dictionary, serial to model dictionary (chain of dictionaries!)
         if len(config.TARGET_NETWORKS) > 0:
             devices = dashboard.organizations.getOrganizationDevices(org_id, total_pages='all', networkIds=networks_ids)
         else:
             devices = dashboard.organizations.getOrganizationDevices(org_id, total_pages='all')
 
         mac_to_serial = {}
+        serial_to_model = {}
         for device in devices:
             mac_to_serial[device["mac"]] = device["serial"]
+            serial_to_model[device['serial']] = device['model']
 
         # Get Org Device Statuses, build serial to status dictionary
         if len(config.TARGET_NETWORKS) > 0:
@@ -88,137 +227,26 @@ def main():
             serial_to_status[status["serial"]] = status["status"]
 
         console.print(
-            f"\nProcessing the following org's ({org['name']}) networks: {[network['name'] for network in networks]}")
+            f"\nProcessing the following networks: {[network['name'] for network in networks]}")
+        console.print(f"Total Networks to process: {len(networks)}")
 
-        with Progress() as progress:
-            overall_progress = progress.add_task("Overall Progress", total=len(networks), transient=True)
-            counter = 1
+        threads = []
+        for net in networks:
+            # Spawn a background thread
+            thread = threading.Thread(target=thread_wrapper,
+                                      args=(net, mac_to_serial, serial_to_model, serial_to_status, ))
+            threads.append(thread)
 
-            for net in networks:
-                progress.console.print(
-                    "\nProcessing Network: [blue]'{}'[/] ({} of {})".format(net['name'], str(counter), len(networks)))
+        # Start all threads
+        for t in threads:
+            t.start()
 
-                net_id = net["id"]
+        # Wait for all threads to finish
+        for t in threads:
+            t.join()
 
-                # grab the network topology from Meraki dashboard to determine which devices are connected to each other
-                try:
-                    topology = dashboard.networks.getNetworkTopologyLinkLayer(net_id)
-                except Exception as e:
-                    # All exceptions (invalid network, etc. are skipped)
-                    continue
-
-                links = topology["links"]
-                progress.console.print(f"Found {len(links)} link(s)")
-
-                connections = []
-                for link in links:
-                    serials = []
-
-                    ends = link["ends"]
-                    progress.console.print(f"Processing link ends: {ends}")
-                    for end in ends:
-                        if end["node"]["type"] == "device":
-                            device = end["device"]
-                            serial = device["serial"]
-                            serials.append({"serial": serial})
-                            progress.console.print(f"- Processing device with serial: {serial}")
-                        elif end["node"]["type"] == "discovered":
-                            # Handle cross network topology case
-
-                            # Check nodes list to see if there's an entry based on derivedId
-                            derivedId = end["node"]['derivedId']
-                            for node in topology['nodes']:
-                                # If there's an entry, and an associated mac for look up, retrieve device serial
-                                if derivedId == node['derivedId'] and 'mac' in node:
-                                    if node['mac'] in mac_to_serial:
-                                        serial = mac_to_serial[node['mac']]
-                                        serials.append({"serial": serial})
-                                        progress.console.print(
-                                            f"- Processing devices with serial (from discovery): {serial}")
-
-                    connections.append(serials)
-
-                progress.console.print(f"Processing {len(connections)} connection(s)")
-                for connection in connections:
-                    progress.console.print(f"- Processing connection: {connection}")
-
-                    for node in connection:
-                        device = dashboard.devices.getDevice(node["serial"])
-                        if "MV" in device["model"]:
-                            node["type"] = "camera"
-                        elif "MS" in device["model"]:
-                            node["type"] = "switch"
-                        elif "MX" in device["model"]:
-                            node["type"] = "router"
-                        else:
-                            node["type"] = "N/A"
-                        # get status to determine what to initialize database
-                        device_status = serial_to_status[node["serial"]]
-                        if device_status == "online" or device_status == "alerting":
-                            node["status"] = "up"
-                        else:
-                            node["status"] = "down"
-
-                    if len(connection) > 1:
-                        device_types = {connection[0]["type"], connection[1]["type"]}
-
-                        if "camera" in device_types and "switch" in device_types:
-                            progress.console.print(f"-- Adding device connection of type: {device_types}")
-
-                            # check if the first connection is a switch
-                            if connection[0]["type"] == "switch":
-                                # check if switch already exists in the database
-                                data = db.query_specific_switch(conn, connection[0]["serial"])
-                                if len(data) == 0:
-                                    # if switch not already in the database, add it
-                                    db.add_switch(conn, connection[0]["serial"],
-                                                  connection[0]["status"])
-
-                                # now add the camera into the database
-                                db.add_camera(conn, connection[1]["serial"],
-                                              connection[1]["status"], connection[0]["serial"])
-                            # the first connection is not a switch, so it must be a camera
-                            else:
-                                # check if switch already exists in the database
-                                data = db.query_specific_switch(conn, connection[1]["serial"])
-                                if len(data) == 0:
-                                    # add switch to database
-                                    db.add_switch(conn, connection[1]["serial"],
-                                                  connection[1]["status"])
-
-                                # now add the camera to the database
-                                db.add_camera(conn, connection[0]["serial"],
-                                              connection[0]["status"], connection[1]["serial"])
-                        elif "switch" in device_types and "router" in device_types:
-                            progress.console.print(f"-- Adding device connection of type: {device_types}")
-
-                            # check if first connection is a router
-                            if connection[0]["type"] == "router":
-                                # check if router already exists in the database
-                                data = db.query_specific_router(conn, connection[0]["serial"])
-                                if len(data) == 0:
-                                    # router is not in database, so it must be added
-                                    db.add_router(conn, connection[0]["serial"],
-                                                  connection[0]["status"])
-
-                                # now add switch into the database
-                                db.add_switch(conn, connection[1]["serial"],
-                                              connection[1]["status"], connection[0]["serial"])
-                            # the first connection is not a router, so it must be a switch
-                            else:
-                                # check if router already exists in database
-                                data = db.query_specific_router(conn, connection[1]["serial"])
-                                if len(data) == 0:
-                                    # router is not in database and needs to be added
-                                    db.add_router(conn, connection[1]["serial"],
-                                                  connection[1]["status"])
-
-                                # now add switch into database
-                                db.add_switch(conn, connection[0]["serial"],
-                                              connection[0]["status"], connection[1]["serial"])
-
-                counter += 1
-                progress.update(overall_progress, advance=1)
+    # connect to database
+    conn = db.create_connection("sqlite.db")
 
     # print the results of all the queries to all the tables
     console.print(Panel.fit("Aggregate Table Output:"))

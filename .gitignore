@@ -6,7 +6,9 @@ __pycache__/
 .idea/
 .DS_Store
 
+# Sensitive File
 .env
+flask_app/config.py
 
 # Local DB
 *.db
