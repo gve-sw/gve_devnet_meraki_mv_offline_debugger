@@ -541,11 +541,14 @@ def meraki_alert():
     if request.method == "POST":
         console.print(Panel.fit("Webhook Alert Detected:"))
         data = request.json  # Retrieve the json data from the request - contains alert info
-        console.print(data)
 
         # Shared Secret Check
         if data['sharedSecret'] != SHARED_SECRET:
             console.print("[red]Error, shared secret doesn't match configured shared secret... ignoring[/]")
+            return 'Webhook ignored, shared secret is incorrect - check the terminal for more information'
+
+        data['sharedSecret'] = ''.join(['*' for char in data['sharedSecret']])
+        console.print(data)
 
         # Optional: filter for specific network
         if len(config.TARGET_NETWORKS) > 0 and not data['networkName'] in config.TARGET_NETWORKS:
