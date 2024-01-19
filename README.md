@@ -1,4 +1,4 @@
-# Meraki MV Offline Troubleshooter
+# Meraki MV Offline Debugger
 
 This flask app serves as an automatic troubleshooting and ticketing platform for Meraki MV Cameras **connected to MS Switches**. The app primarily listens for Meraki `Camera Offline` Webhook Alerts, executes the MV troubleshooting algorithm, and generates a ServiceNow ticket if the troubleshooting algorithm is unsuccessful in bringing up the MV camera.
 
