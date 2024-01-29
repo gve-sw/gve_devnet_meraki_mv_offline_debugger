@@ -327,6 +327,8 @@ def generate_ticket_data(processing_data, webhook_data, conn):
         # If an API error happened during processing, bubble up to the ticket
         if processing_data['api_error']:
             ticket_data['API Error'] = processing_data['api_error']
+        else:
+            ticket_data['API Error'] = ""
 
         # If there's switchport status information (both warnings and errors are not None)
         if processing_data['switch_port_status']['errors'] is not None and processing_data['switch_port_status'][
@@ -390,7 +392,7 @@ def log_ticket_information(ticket_data, webhook_data):
         fieldnames = ['Timestamp', 'Alert Type', 'Network', 'Affected Device Type', 'Affected Device Name',
                       'Affected Device Serial', 'Impacted Camera Name(s)', 'Impacted Camera Serial(s)',
                       'Upstream Switch Serial', 'Upstream Switch Name', 'Upstream Switch Port', 'Switch Port Warnings',
-                      'Switch Port Errors']
+                      'Switch Port Errors', 'API Error']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
         # Add header if file doesn't exist
