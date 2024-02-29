@@ -143,6 +143,22 @@ def query_all_cameras(conn):
     return cameras
 
 
+def query_all_tickets(conn):
+    """
+    Return all snow_tickets in Tickets Table
+    :param conn: DB Connection Object
+    :return: List of SNOW Tickets
+    """
+    c = conn.cursor()
+
+    c.execute("""SELECT *
+              FROM snow_tickets
+              """)
+    tickets = c.fetchall()
+
+    return tickets
+
+
 def query_router_status(conn, serial):
     """
     Get status of individual router
@@ -214,7 +230,7 @@ def query_switch_connection(conn, serial):
 
     connection = c.fetchall()
 
-    return connection
+    return connection if len(connection) > 0 else None
 
 
 def query_camera_connection(conn, serial):
@@ -233,7 +249,7 @@ def query_camera_connection(conn, serial):
 
     connection = c.fetchall()
 
-    return connection
+    return connection if len(connection) > 0 else None
 
 
 def update_device_status(conn, device_type, serial, status):
@@ -243,7 +259,6 @@ def update_device_status(conn, device_type, serial, status):
     :param device_type: Type of device, dictates table
     :param serial: Device Serial
     :param status: Device new status
-    :return:
     """
     c = conn.cursor()
 
@@ -255,7 +270,6 @@ def update_device_status(conn, device_type, serial, status):
         table = "cameras"
     else:
         print("Unable to update device status because device type is not recognized")
-
         return
 
     update_statement = "UPDATE " + table + " SET status = '" + status + "' WHERE serial = ?"
@@ -361,13 +375,14 @@ def add_router(conn, serial, status):
     :param conn: DB Connection object
     :param serial: New router serial
     :param status: Router current status
-    :return:
     """
     c = conn.cursor()
 
     c.execute("""INSERT OR REPLACE INTO routers (serial, status)
               VALUES (?, ?)""",
               (serial, status))
+
+    conn.commit()
 
 
 def add_switch(conn, serial, status, connection=None):
@@ -376,7 +391,6 @@ def add_switch(conn, serial, status, connection=None):
     :param conn: DB Connection object
     :param serial: New switch serial
     :param status: Switch current status
-    :return:
     """
     c = conn.cursor()
 
@@ -398,7 +412,6 @@ def add_camera(conn, serial, status, connection=None):
     :param conn: DB Connection object
     :param serial: New camera serial
     :param status: Camera current status
-    :return:
     """
     c = conn.cursor()
 
@@ -420,7 +433,6 @@ def add_snow_ticket(conn, serial, incident_sys_id):
     :param conn: DB Connection object
     :param serial: Device serial number
     :param incident_sys_id: SNOW Incident ID
-    :return:
     """
     c = conn.cursor()
 
@@ -430,12 +442,53 @@ def add_snow_ticket(conn, serial, incident_sys_id):
     conn.commit()
 
 
+def delete_switch(conn, serial):
+    """
+    Delete switch from DB
+    :param conn: DB Connection object
+    :param serial: Device serial number
+    """
+    c = conn.cursor()
+
+    c.execute("""DELETE from switches WHERE serial = ?""",
+              (serial,))
+
+    conn.commit()
+
+
+def delete_router(conn, serial):
+    """
+    Delete router from DB
+    :param conn: DB Connection object
+    :param serial: Device serial number
+    """
+    c = conn.cursor()
+
+    c.execute("""DELETE from routers WHERE serial = ?""",
+              (serial,))
+
+    conn.commit()
+
+
+def delete_camera(conn, serial):
+    """
+    Delete camera from DB
+    :param conn: DB Connection object
+    :param serial: Device serial number
+    """
+    c = conn.cursor()
+
+    c.execute("""DELETE from cameras WHERE serial = ?""",
+              (serial,))
+
+    conn.commit()
+
+
 def delete_snow_ticket(conn, serial):
     """
     Delete SNOW Ticket from DB
     :param conn: DB Connection object
     :param serial: Device serial number
-    :return:
     """
     c = conn.cursor()
 
@@ -449,7 +502,6 @@ def close_connection(conn):
     """
     Close DB Connection
     :param conn: DB Connection
-    :return:
     """
     conn.close()
 

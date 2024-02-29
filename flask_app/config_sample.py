@@ -1,10 +1,10 @@
-# Meraki API Configs
+# Meraki API Configs (see README.md)
 TICKET_CSV_PATH = ""
 
 # ServiceNow Section
 SERVICE_NOW_ENABLED = True
 
-# Additional ServiceNow Ticket Features
+# Additional ServiceNow Ticket Features (see README.md)
 TICKET_CLEANUP = False
 DUPLICATE_TICKETS = True
 

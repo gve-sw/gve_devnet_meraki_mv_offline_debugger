@@ -169,6 +169,13 @@ The next step is to populate the database with the devices in your Meraki networ
 
 Once the code completes, it will print out the contents of the routers, switches, and camera tables in the database representing (Source Serial, Connected Device Serial, Source Status)
 
+Optional Arguments include:
+
+```
+-h: Help Message
+--print {camera,switch,router,ticket}: Print contents of specified table
+```
+
 ![](IMAGES/populate_output.png)
 
 **Note**: this code is written with the assumption that the switches are connected to routers and the access points are connected to switches. If this is not the case in your environment, it will likely generate an error. To remedy this, add more conditions in the file. For example, there is a condition to check if the device types connected to one another are an 'Camera' and 'switch'. Suppose you have switches connected to switches in your environment, you will need to add a condition to the code that checks if the device types are both 'switch' and then write the code to handle this condition.

@@ -18,16 +18,16 @@ __copyright__ = "Copyright (c) 2023 Cisco and/or its affiliates."
 __license__ = "Cisco Sample Code License, Version 1.1"
 
 import os
-from pprint import pprint
 from rich.console import Console
 from rich.panel import Panel
 from dotenv import load_dotenv
+import threading
+import argparse
 
 import meraki
 
 import config
 import db
-import threading
 
 # Rich Console Instance
 console = Console()
@@ -36,9 +36,62 @@ console = Console()
 load_dotenv()
 MERAKI_API_KEY = os.getenv('MERAKI_API_KEY')
 
-
 # connect to Meraki dashboard
 dashboard = meraki.DashboardAPI(MERAKI_API_KEY, suppress_logging=True, maximum_retries=25)
+
+
+def clear_stale_devices():
+    """
+    Background thread, remove devices still in the DB but no longer in the inventory (removed devices for ex.)
+    """
+    conn = db.create_connection("sqlite.db")
+
+    # Get orgs
+    orgs = dashboard.organizations.getOrganizations()
+
+    total_inventory = []
+    for org in orgs:
+        # Get Organization inventory
+        try:
+            inventory = dashboard.organizations.getOrganizationInventoryDevices(org['id'],
+                                                                            productTypes=['appliance', 'camera',
+                                                                                          'switch'], total_pages='all')
+        except meraki.APIError as e:
+            continue
+
+        # Add only serials into org inventory
+        for item in inventory:
+            total_inventory.append(item["serial"])
+
+    # Check if any cameras are no longer in the inventory
+    cameras = db.query_all_cameras(conn)
+    for camera in cameras:
+        serial = camera[0]
+
+        if serial not in total_inventory:
+            # Remove stale item
+            console.log(f'Deleted camera {serial} from DB - clean up thread')
+            db.delete_camera(conn, serial)
+
+    # Check if any switches are no longer in the inventory
+    switches = db.query_all_switches(conn)
+    for switch in switches:
+        serial = switch[0]
+
+        if serial not in total_inventory:
+            # Remove stale item
+            console.log(f'Deleted switch {serial} from DB - clean up thread')
+            db.delete_switch(conn, serial)
+
+    # Check if any routers are no longer in the inventory
+    routers = db.query_all_routers(conn)
+    for router in routers:
+        serial = router[0]
+
+        if serial not in total_inventory:
+            # Remove stale item
+            console.log(f'Deleted router {serial} from DB - clean up thread')
+            db.delete_router(conn, serial)
 
 
 def thread_wrapper(net, mac_to_serial, serial_to_model, serial_to_status):
@@ -49,7 +102,6 @@ def thread_wrapper(net, mac_to_serial, serial_to_model, serial_to_status):
     :param mac_to_serial: Org Wide Device Mac to Serial Mapping
     :param serial_to_model: Org Wide Device Serials to Meraki Model Mapping
     :param serial_to_status: Org Wide Device Serial to Device Status Mapping
-    :return: Add Valid Mappings to DB (no return)
     """
     # connect to database
     conn = db.create_connection("sqlite.db")
@@ -180,16 +232,61 @@ def thread_wrapper(net, mac_to_serial, serial_to_model, serial_to_status):
     console.print(f"Processed the following connection(s): {processed_connections}")
 
 
-def main():
-    # Iterate through every org, every network, build topology information
-    console.print(Panel.fit("Building Topology Table:"))
+def update_network_topology(org_id, net):
+    """
+    Rerun Topology calculations on a specific network (obtain org structures, rebuild topology if necessary)
+    :param org_id: Org ID
+    :param net: Network object (reduced - name and ID only)
+    """
+    networks = dashboard.organizations.getOrganizationNetworks(org_id, total_pages="all")
 
+    # Optional: filter out the specific networks from the list
+    if len(config.TARGET_NETWORKS) > 0:
+        networks = [entry for entry in networks if entry['name'] in config.TARGET_NETWORKS]
+        networks_ids = [entry['id'] for entry in networks if entry['name'] in config.TARGET_NETWORKS]
+
+    # Get Org Devices, build mac to serial dictionary, serial to model dictionary (chain of dictionaries!)
+    if len(config.TARGET_NETWORKS) > 0:
+        devices = dashboard.organizations.getOrganizationDevices(org_id, total_pages='all', networkIds=networks_ids)
+    else:
+        devices = dashboard.organizations.getOrganizationDevices(org_id, total_pages='all')
+
+    mac_to_serial = {}
+    serial_to_model = {}
+    for device in devices:
+        mac_to_serial[device["mac"]] = device["serial"]
+        serial_to_model[device['serial']] = device['model']
+
+    # Get Org Device Statuses, build serial to status dictionary
+    if len(config.TARGET_NETWORKS) > 0:
+        device_statuses = dashboard.organizations.getOrganizationDevicesStatuses(org_id, total_pages='all',
+                                                                                 networkIds=networks_ids)
+    else:
+        device_statuses = dashboard.organizations.getOrganizationDevicesStatuses(org_id, total_pages='all')
+
+    serial_to_status = {}
+    for status in device_statuses:
+        serial_to_status[status["serial"]] = status["status"]
+
+    console.print(f"\nUpdating topology for network: {net['name']}")
+
+    # Spawn a background thread to process network
+    thread = threading.Thread(target=thread_wrapper,
+                              args=(net, mac_to_serial, serial_to_model, serial_to_status,))
+    thread.start()
+
+
+def build_full_topology():
+    """
+    Build full topology tables: construct camera, switch, router tables and their various connects. Warning: this can be
+    time intensive!
+    """
+    # Iterate through every org, every network, build topology information
     orgs = dashboard.organizations.getOrganizations()
     for org in orgs:
         console.print(Panel.fit(f"Processing Org: {org['name']}"))
         org_id = org["id"]
 
-        # get net id for net name in environment variables
         try:
             networks = dashboard.organizations.getOrganizationNetworks(org_id, total_pages="all")
         except meraki.APIError as e:
@@ -218,7 +315,8 @@ def main():
 
         # Get Org Device Statuses, build serial to status dictionary
         if len(config.TARGET_NETWORKS) > 0:
-            device_statuses = dashboard.organizations.getOrganizationDevicesStatuses(org_id, total_pages='all', networkIds=networks_ids)
+            device_statuses = dashboard.organizations.getOrganizationDevicesStatuses(org_id, total_pages='all',
+                                                                                     networkIds=networks_ids)
         else:
             device_statuses = dashboard.organizations.getOrganizationDevicesStatuses(org_id, total_pages='all')
 
@@ -234,7 +332,7 @@ def main():
         for net in networks:
             # Spawn a background thread
             thread = threading.Thread(target=thread_wrapper,
-                                      args=(net, mac_to_serial, serial_to_model, serial_to_status, ))
+                                      args=(net, mac_to_serial, serial_to_model, serial_to_status,))
             threads.append(thread)
 
         # Start all threads
@@ -245,21 +343,58 @@ def main():
         for t in threads:
             t.join()
 
-    # connect to database
-    conn = db.create_connection("sqlite.db")
-
-    # print the results of all the queries to all the tables
+    # Print the results of all the queries to all the tables
     console.print(Panel.fit("Aggregate Table Output:"))
 
-    console.print("[green]Routers (router, status):[/]")
-    pprint(db.query_all_routers(conn))
-    console.print("[green]Switches (switch, router, switch status):[/]")
-    pprint(db.query_all_switches(conn))
-    console.print("[green]Cameras (camera, switch, camera status):[/]")
-    pprint(db.query_all_cameras(conn))
+    print_table('router')
+    print_table('switch')
+    print_table('camera')
+
+
+def print_table(table):
+    """
+    Print contents of specified table (useful for debugging and replacing camera serials)
+    :param table: Table name from CLI args (options: camera, switch, router)
+    """
+    # Connect to database
+    conn = db.create_connection("sqlite.db")
+
+    if table == 'camera':
+        console.print("Cameras ([green]camera[/], [green]switch[/], [green]camera status[/]):")
+        console.print(db.query_all_cameras(conn))
+    elif table == 'switch':
+        console.print("Switches ([green]switch[/], [green]router[/], [green]switch status[/]):")
+        console.print(db.query_all_switches(conn))
+    elif table == 'router':
+        console.print("Routers ([green]router[/], [green]status[/]):")
+        console.print(db.query_all_routers(conn))
+    else:
+        console.print("SNOW Tickets ([green]device serial[/], [green]ticket id[/]):")
+        console.print(db.query_all_tickets(conn))
 
     # close the database connection
     db.close_connection(conn)
+
+
+def main():
+    # Process option args
+    parser = argparse.ArgumentParser(description="Populates Database with topology information (Cameras, Switches, "
+                                                 "Routers)", epilog="Run with no arguments to build full topology "
+                                                                    "table (warning: this can be time intensive!)")
+    parser.add_argument("--print", "-p", help="Print Table Contents", choices=['camera', 'switch', 'router', 'ticket'],
+                        required=False)
+    args = parser.parse_args()
+
+    if args.print:
+        console.print(Panel.fit(f"Printing {args.print.capitalize()} Table Contents:"))
+
+        # If print option provided, display table contents
+        print_table(args.print)
+    else:
+        console.print(Panel.fit("Building Full Topology Table:"))
+
+        # Run full topology building workflow
+        build_full_topology()
 
 
 if __name__ == "__main__":

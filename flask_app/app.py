@@ -36,6 +36,7 @@ from rich.panel import Panel
 
 import config
 import db
+import populate
 
 # Global Flask flask_app
 app = Flask(__name__)
@@ -68,6 +69,10 @@ FORMATTER = logging.Formatter('%(asctime)s [%(levelname)s]: %(message)s')
 # Scheduler Section
 scheduler = BackgroundScheduler()
 scheduler.start()
+
+# Create backend thread job to remove stale items in config database (every 65 minutes, to enable no scenario where
+# nodes are dangling)
+scheduler.add_job(populate.clear_stale_devices, 'interval', minutes=65)
 
 TICKET_REMOVAL_TIME = 1  # time to wait (hours) to check if a device is active and a ticket is stale
 
@@ -292,7 +297,7 @@ def generate_ticket_data(processing_data, webhook_data, conn):
     d = datetime.datetime.fromisoformat(webhook_data['occurredAt'][:-1]).astimezone(datetime.timezone.utc)
     dt_string = d.strftime('%Y-%m-%d %H:%M:%S')
 
-    ticket_data = {'Timestamp': dt_string, 'Alert Type': webhook_data["alertType"],
+    ticket_data = {'Most Recent Timestamp': dt_string, 'Alert Type': webhook_data["alertType"],
                    'Network': webhook_data['networkName']}
 
     # Cases:
@@ -305,8 +310,8 @@ def generate_ticket_data(processing_data, webhook_data, conn):
         ticket_data['Affected Device Serial'] = webhook_data['deviceSerial']
 
         # Impacted Cameras
-        ticket_data['Impacted Camera Name(s)'] = 'N/A'
-        ticket_data['Impacted Camera Serial(s)'] = 'N/A'
+        ticket_data['Impacted Camera Name(s)'] = str([])
+        ticket_data['Impacted Camera Serial(s)'] = str([])
 
         # Upstream switch connection
         if processing_data['switch_serial']:
@@ -315,8 +320,8 @@ def generate_ticket_data(processing_data, webhook_data, conn):
             device = dashboard.devices.getDevice(processing_data['switch_serial'])
             ticket_data['Upstream Switch Name'] = device['name']
         else:
-            ticket_data['Upstream Switch Serial'] = 'N/A'
-            ticket_data['Upstream Switch Name'] = 'N/A'
+            ticket_data['Upstream Switch Serial'] = ""
+            ticket_data['Upstream Switch Name'] = ""
 
         # If switch port is not none
         if processing_data['switch_port']:
@@ -333,8 +338,8 @@ def generate_ticket_data(processing_data, webhook_data, conn):
         # If there's switchport status information (both warnings and errors are not None)
         if processing_data['switch_port_status']['errors'] is not None and processing_data['switch_port_status'][
             'warnings'] is not None:
-            ticket_data['Switch Port Errors'] = processing_data['switch_port_status']['errors']
-            ticket_data['Switch Port Warnings'] = processing_data['switch_port_status']['warnings']
+            ticket_data['Switch Port Errors'] = str(processing_data['switch_port_status']['errors'])
+            ticket_data['Switch Port Warnings'] = str(processing_data['switch_port_status']['warnings'])
 
     # MX Went down
     elif ticket_data['Alert Type'] == "appliances went down":
@@ -346,13 +351,13 @@ def generate_ticket_data(processing_data, webhook_data, conn):
         # Impacted Cameras (calculate all impacted cameras downstream)
         cameras = find_impacted_cameras(webhook_data['deviceSerial'], 'router', conn)
 
-        ticket_data['Impacted Camera Name(s)'] = [cam[1] for cam in cameras]
-        ticket_data['Impacted Camera Serial(s)'] = [cam[0] for cam in cameras]
+        ticket_data['Impacted Camera Name(s)'] = str([cam[1] for cam in cameras])
+        ticket_data['Impacted Camera Serial(s)'] = str([cam[0] for cam in cameras])
 
         # Upstream switch connection
-        ticket_data['Upstream Switch Serial'] = 'N/A'
-        ticket_data['Upstream Switch Name'] = 'N/A'
-        ticket_data['Upstream Switch Port'] = 'N/A'
+        ticket_data['Upstream Switch Serial'] = ''
+        ticket_data['Upstream Switch Name'] = ''
+        ticket_data['Upstream Switch Port'] = ''
     elif ticket_data['Alert Type'] == "switches went down":
         # Build ticket contents
         ticket_data['Affected Device Type'] = 'Switch'
@@ -362,13 +367,13 @@ def generate_ticket_data(processing_data, webhook_data, conn):
         # Impacted Cameras (calculate all impacted cameras downstream)
         cameras = find_impacted_cameras(webhook_data['deviceSerial'], 'switch', conn)
 
-        ticket_data['Impacted Camera Name(s)'] = [cam[1] for cam in cameras]
-        ticket_data['Impacted Camera Serial(s)'] = [cam[0] for cam in cameras]
+        ticket_data['Impacted Camera Name(s)'] = str([cam[1] for cam in cameras])
+        ticket_data['Impacted Camera Serial(s)'] = str([cam[0] for cam in cameras])
 
         # Upstream switch connection
-        ticket_data['Upstream Switch Serial'] = 'N/A'
-        ticket_data['Upstream Switch Name'] = 'N/A'
-        ticket_data['Upstream Switch Port'] = 'N/A'
+        ticket_data['Upstream Switch Serial'] = ''
+        ticket_data['Upstream Switch Name'] = ''
+        ticket_data['Upstream Switch Port'] = ''
     else:
         return
 
@@ -385,22 +390,52 @@ def log_ticket_information(ticket_data, webhook_data):
     l = custom_logger(webhook_data['deviceSerial'])
     l.info(f'Logging {webhook_data} to CSV file')
 
-    file_exists = os.path.isfile(config.TICKET_CSV_PATH)
+    # Update occurrences if a matching row is found
+    rows = update_occurrences(config.TICKET_CSV_PATH, ticket_data)
 
-    # Append ticket information to csv file
-    with open(config.TICKET_CSV_PATH, 'a') as csvfile:
-        fieldnames = ['Timestamp', 'Alert Type', 'Network', 'Affected Device Type', 'Affected Device Name',
-                      'Affected Device Serial', 'Impacted Camera Name(s)', 'Impacted Camera Serial(s)',
-                      'Upstream Switch Serial', 'Upstream Switch Name', 'Upstream Switch Port', 'Switch Port Warnings',
-                      'Switch Port Errors', 'API Error']
+    # Write ticket information to csv file
+    with open(config.TICKET_CSV_PATH, 'w') as csvfile:
+        fieldnames = ['Most Recent Timestamp', 'Occurrences', 'Alert Type', 'Network', 'Affected Device Type',
+                      'Affected Device Name', 'Affected Device Serial', 'Impacted Camera Name(s)',
+                      'Impacted Camera Serial(s)', 'Upstream Switch Serial', 'Upstream Switch Name',
+                      'Upstream Switch Port', 'Switch Port Warnings', 'Switch Port Errors', 'API Error']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-        # Add header if file doesn't exist
-        if not file_exists:
-            writer.writeheader()
+        # Add header + rows to file (overwritten)
+        writer.writeheader()
+        writer.writerows(rows)
 
-        # Write to csv
-        writer.writerow(ticket_data)
+
+def update_occurrences(csvfile, ticket_data):
+    """
+    Search through CSV rows, find a matching tick entry (all fields except time stamp must match!) - increase occurrence counter by 1
+    :param csvfile: CSV file path
+    :param ticket_data: New ticket data
+    :return: rows for CSV file (updated)
+    """
+    rows = []
+
+    if os.path.exists(csvfile):
+        found_match = False
+        # Open the CSV file and look for a matching row
+        with open(csvfile, 'r', newline='') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                # Check for a match on all fields except 'Most Recent Timestamp'
+                if all(row[field] == ticket_data[field] for field in ticket_data if field != 'Most Recent Timestamp'):
+                    row['Occurrences'] = str(int(row.get('Occurrences', 0)) + 1)
+                    found_match = True
+                rows.append(row)
+
+        # If no match is found, add the new ticket data
+        if not found_match:
+            ticket_data['Occurrences'] = '1'
+            rows.append(ticket_data)
+    else:
+        ticket_data['Occurrences'] = '1'
+        rows.append(ticket_data)
+
+    return rows
 
 
 def service_now_ticket_cleanup(org_id, serial, snow_sys_id):
@@ -565,7 +600,7 @@ def meraki_alert():
             org_id = data['organizationId']
             serial = data['deviceSerial']
 
-            # check what the camera status is
+            # Check what the camera status is
             camera_status = db.query_camera_status(conn, serial)
             console.print(f"Camera ({serial}) topology status is: {camera_status}")
 
@@ -576,30 +611,36 @@ def meraki_alert():
                 # Now we need to check to see if the Camera connection is also down before we create a ticket
                 connection = db.query_camera_connection(conn, serial)
 
-                switch_serial = connection[0][0]
-                switch_status = db.query_switch_status(conn, switch_serial)
-                console.print(f"Connected Switch ({switch_serial}) current status is: {switch_status}")
+                if connection and connection[0][0] is not None:
+                    switch_serial = connection[0][0]
+                    switch_status = db.query_switch_status(conn, switch_serial)
+                    console.print(f"Connected Switch ({switch_serial}) current status is: {switch_status}")
 
-                # If the switch status is up, we create a ticket
-                if switch_status[0][0] == "up":
-                    # Check if a ticket already exists for the Camera (from critical hardware failure, or another
-                    # ticket)
-                    ticket = db.query_specific_snow_ticket(conn, serial)
+                    # If the switch status is up, we create a ticket
+                    if switch_status and switch_status[0][0] == "up":
+                        # Check if a ticket already exists for the Camera (from critical hardware failure, or another
+                        # ticket)
+                        ticket = db.query_specific_snow_ticket(conn, serial)
 
-                    if config.DUPLICATE_TICKETS and len(ticket) > 0:
-                        console.print(
-                            f"No ticket created for the Camera, existing SNOW ticket present: {ticket[0][0]}")
+                        if config.DUPLICATE_TICKETS and len(ticket) > 0:
+                            console.print(
+                                f"No ticket created for the Camera, existing SNOW ticket present: {ticket[0][0]}")
+                        else:
+                            # Pass processing off to celery worker
+                            console.print(f'Passing processing to [green]celery worker[/]...')
+
+                            # Build chain of celery tasks, once main debug loop complete, write results to csv file,
+                            # create SNOW ticket
+                            chain(debug_mv_camera.s(org_id, serial, data['deviceName'], switch_serial),
+                                  create_service_now_ticket.s(data)).apply_async()
+
                     else:
-                        # Pass processing off to celery worker
-                        console.print(f'Passing processing to [green]celery worker[/]...')
-
-                        # Build chain of celery tasks, once main debug loop complete, write results to csv file,
-                        # create SNOW ticket
-                        chain(debug_mv_camera.s(org_id, serial, data['deviceName'], switch_serial),
-                              create_service_now_ticket.s(data)).apply_async()
-
+                        console.print("No ticket created for the Camera")
+                # There is no connection to the camera, we should create a ticket
                 else:
-                    console.print("No ticket created for the Camera")
+                    # Log ticket information, create ServiceNow ticket
+                    create_service_now_ticket.delay(None, data)
+                    console.print("Ticket created for the Camera")
 
         elif data["alertType"] == "Camera may have critical hardware failure":
             # Camera has critical hardware failure
@@ -640,7 +681,7 @@ def meraki_alert():
 
                 # Now we need to check to see if the switch connection is also down before we create a ticket
                 connection = db.query_switch_connection(conn, serial)
-                if connection[0][0] is not None:
+                if connection and connection[0][0] is not None:
                     router_status = db.query_router_status(conn, connection[0][0])
                     # If the router status is up, we create a ticket
                     if router_status[0][0] == "up":
@@ -672,74 +713,98 @@ def meraki_alert():
             else:
                 # router is already down, ticket should have already been created
                 console.print("No ticket created, router is already down or not in DB. Check for existing ticket")
+
         elif data["alertType"] == "switches came up":
             # Grab Data from Webhook
             serial = data["deviceSerial"]
             org_id = data['organizationId']
 
-            # The switch is up, so we need to update the database to reflect this
-            db.update_device_status(conn, "switch", serial, "up")
-            console.print(f"Switch ({serial}) is back up")
+            # Check switch status (if none, this is a new switch, topological implications)
+            switch_status = db.query_switch_status(conn, serial)
 
-            # query ticket from DB
-            data = db.query_specific_snow_ticket(conn, serial)
+            if switch_status:
+                # The switch is up, so we need to update the database to reflect this
+                db.update_device_status(conn, "switch", serial, "up")
+                console.print(f"Switch ({serial}) is back up")
 
-            if len(data) > 0:
-                # Ticket present, delete from DB
-                db.delete_snow_ticket(conn, serial)
+                # query ticket from DB
+                data = db.query_specific_snow_ticket(conn, serial)
 
-                if config.TICKET_CLEANUP:
-                    # Remove SNOW ticket after set amount of hours if device is online at that time
-                    scheduler.add_job(
-                        service_now_ticket_cleanup, args=[org_id, serial, data[0][0]], trigger='date',
-                        run_date=datetime.datetime.now() + datetime.timedelta(hours=TICKET_REMOVAL_TIME)
-                    )
+                if len(data) > 0:
+                    # Ticket present, delete from DB
+                    db.delete_snow_ticket(conn, serial)
+
+                    if config.TICKET_CLEANUP:
+                        # Remove SNOW ticket after set amount of hours if device is online at that time
+                        scheduler.add_job(
+                            service_now_ticket_cleanup, args=[org_id, serial, data[0][0]], trigger='date',
+                            run_date=datetime.datetime.now() + datetime.timedelta(hours=TICKET_REMOVAL_TIME)
+                        )
+            else:
+                # New switch! (need to rerun topology calculations on network - back end thread)
+                populate.update_network_topology(org_id, {'id': data['networkId'], 'name': data['networkName']})
+                console.print(f"A new switch ({serial}) was added! Topology updated!")
 
         elif data["alertType"] == "appliances came up":
             # Grab Data from Webhook
             serial = data["deviceSerial"]
             org_id = data['organizationId']
 
-            # The router is up, so we need to update the database to reflect this
-            db.update_device_status(conn, "router", serial, "up")
-            console.print(f"Router ({serial}) is back up")
+            # Check what the router status is (if none, router is new!)
+            router_status = db.query_router_status(conn, serial)
 
-            # query ticket from DB
-            data = db.query_specific_snow_ticket(conn, serial)
+            if router_status:
+                # The router is up, so we need to update the database to reflect this
+                db.update_device_status(conn, "router", serial, "up")
+                console.print(f"Router ({serial}) is back up")
 
-            if len(data) > 0:
-                # Ticket present, delete from DB
-                db.delete_snow_ticket(conn, serial)
+                # query ticket from DB
+                data = db.query_specific_snow_ticket(conn, serial)
 
-                if config.TICKET_CLEANUP:
-                    # Remove SNOW ticket after set amount of hours if device is online at that time
-                    scheduler.add_job(
-                        service_now_ticket_cleanup, args=[org_id, serial, data[0][0]], trigger='date',
-                        run_date=datetime.datetime.now() + datetime.timedelta(hours=TICKET_REMOVAL_TIME)
-                    )
+                if len(data) > 0:
+                    # Ticket present, delete from DB
+                    db.delete_snow_ticket(conn, serial)
+
+                    if config.TICKET_CLEANUP:
+                        # Remove SNOW ticket after set amount of hours if device is online at that time
+                        scheduler.add_job(
+                            service_now_ticket_cleanup, args=[org_id, serial, data[0][0]], trigger='date',
+                            run_date=datetime.datetime.now() + datetime.timedelta(hours=TICKET_REMOVAL_TIME)
+                        )
+            else:
+                # New router!
+                db.add_router(conn, serial, 'up')
+                console.print(f"A new router ({serial}) was added!")
 
         elif data["alertType"] == "cameras came up":
             # Grab Data from Webhook
             serial = data["deviceSerial"]
             org_id = data['organizationId']
 
-            # The Camera is up, so we need to update the database to reflect this
-            db.update_device_status(conn, "camera", serial, "up")
-            console.print(f"Camera ({serial}) is back up")
+            camera_status = db.query_camera_status(conn, serial)
 
-            # query ticket from DB
-            data = db.query_specific_snow_ticket(conn, serial)
+            if camera_status:
+                # The Camera is up, so we need to update the database to reflect this
+                db.update_device_status(conn, "camera", serial, "up")
+                console.print(f"Camera ({serial}) is back up")
 
-            if len(data) > 0:
-                # Ticket present, delete from DB
-                db.delete_snow_ticket(conn, serial)
+                # query ticket from DB
+                data = db.query_specific_snow_ticket(conn, serial)
 
-                if config.TICKET_CLEANUP:
-                    # Remove SNOW ticket after set amount of hours if device is online at that time
-                    scheduler.add_job(
-                        service_now_ticket_cleanup, args=[org_id, serial, data[0][0]], trigger='date',
-                        run_date=datetime.datetime.now() + datetime.timedelta(hours=TICKET_REMOVAL_TIME)
-                    )
+                if len(data) > 0:
+                    # Ticket present, delete from DB
+                    db.delete_snow_ticket(conn, serial)
+
+                    if config.TICKET_CLEANUP:
+                        # Remove SNOW ticket after set amount of hours if device is online at that time
+                        scheduler.add_job(
+                            service_now_ticket_cleanup, args=[org_id, serial, data[0][0]], trigger='date',
+                            run_date=datetime.datetime.now() + datetime.timedelta(hours=TICKET_REMOVAL_TIME)
+                        )
+            else:
+                # New camera! (need to rerun topology calculations on network - back end thread)
+                populate.update_network_topology(org_id, {'id': data['networkId'], 'name': data['networkName']})
+                console.print(f"A new camera ({serial}) was added!")
 
         db.close_connection(conn)
 
@@ -747,4 +812,4 @@ def meraki_alert():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000, host='0.0.0.0')
+    app.run(debug=False, port=5000, host='0.0.0.0')
