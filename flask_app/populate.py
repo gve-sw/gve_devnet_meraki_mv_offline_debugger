@@ -37,7 +37,7 @@ load_dotenv()
 MERAKI_API_KEY = os.getenv('MERAKI_API_KEY')
 
 # connect to Meraki dashboard
-dashboard = meraki.DashboardAPI(MERAKI_API_KEY, suppress_logging=True, maximum_retries=25)
+dashboard = meraki.DashboardAPI(MERAKI_API_KEY, suppress_logging=True, maximum_retries=50)
 
 
 def clear_stale_devices():
@@ -47,7 +47,11 @@ def clear_stale_devices():
     conn = db.create_connection("sqlite.db")
 
     # Get orgs
-    orgs = dashboard.organizations.getOrganizations()
+    try:
+        orgs = dashboard.organizations.getOrganizations()
+    except meraki.APIError as e:
+        # If there's an issue (429, etc.), then skip this background task and try again in the next cycle
+        return
 
     total_inventory = []
     for org in orgs:
