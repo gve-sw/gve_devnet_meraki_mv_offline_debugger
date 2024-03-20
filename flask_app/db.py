@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """
-Copyright (c) 2023 Cisco and/or its affiliates.
-
+Copyright (c) 2024 Cisco and/or its affiliates.
 This software is licensed to you under the terms of the Cisco Sample
 Code License, Version 1.1 (the "License"). You may obtain a copy of the
 License at
-
-               https://developer.cisco.com/docs/licenses
-
+https://developer.cisco.com/docs/licenses
 All use of the material herein must be in accordance with the terms of
 the License. All rights not expressly granted by the License are
 reserved. Unless required by applicable law or agreed to separately in
@@ -17,7 +14,7 @@ or implied.
 """
 
 __author__ = "Trevor Maco <tmaco@cisco.com>"
-__copyright__ = "Copyright (c) 2023 Cisco and/or its affiliates."
+__copyright__ = "Copyright (c) 2024 Cisco and/or its affiliates."
 __license__ = "Cisco Sample Code License, Version 1.1"
 
 import sqlite3
@@ -25,11 +22,11 @@ from pprint import pprint
 from sqlite3 import Error
 
 
-def create_connection(db_file):
+def create_connection(db_file: str) -> sqlite3.Connection | None:
     """
     Connect to DB
     :param db_file: DB Object
-    :return:
+    :return: Connections Object
     """
     conn = None
     try:
@@ -42,11 +39,10 @@ def create_connection(db_file):
         return None
 
 
-def create_tables(conn):
+def create_tables(conn: sqlite3.Connection):
     """
     Create Empty Tables (Routers, Switches, Cameras, SNOW Tickets)
     :param conn: DB Connection Object
-    :return:
     """
     c = conn.cursor()
 
@@ -93,7 +89,7 @@ def create_tables(conn):
     conn.commit()
 
 
-def query_all_routers(conn):
+def query_all_routers(conn: sqlite3.Connection) -> list:
     """
     Return all routers in Router Table
     :param conn: DB Connection Object
@@ -110,7 +106,7 @@ def query_all_routers(conn):
     return routers
 
 
-def query_all_switches(conn):
+def query_all_switches(conn: sqlite3.Connection) -> list:
     """
     Return all switches in Switches Table
     :param conn: DB Connection Object
@@ -127,7 +123,7 @@ def query_all_switches(conn):
     return switches
 
 
-def query_all_cameras(conn):
+def query_all_cameras(conn: sqlite3.Connection) -> list:
     """
     Return all cameras in Camera Table
     :param conn: DB Connection Object
@@ -143,7 +139,7 @@ def query_all_cameras(conn):
     return cameras
 
 
-def query_all_tickets(conn):
+def query_all_tickets(conn: sqlite3.Connection) -> list:
     """
     Return all snow_tickets in Tickets Table
     :param conn: DB Connection Object
@@ -159,7 +155,7 @@ def query_all_tickets(conn):
     return tickets
 
 
-def query_router_status(conn, serial):
+def query_router_status(conn: sqlite3.Connection, serial: str) -> list | None:
     """
     Get status of individual router
     :param conn: DB Connection object
@@ -178,7 +174,7 @@ def query_router_status(conn, serial):
     return router_status if len(router_status) > 0 else None
 
 
-def query_switch_status(conn, serial):
+def query_switch_status(conn: sqlite3.Connection, serial: str) -> list | None:
     """
     Get status of individual switch
     :param conn: DB Connection object
@@ -196,7 +192,7 @@ def query_switch_status(conn, serial):
     return switch_status if len(switch_status) > 0 else None
 
 
-def query_camera_status(conn, serial):
+def query_camera_status(conn: sqlite3.Connection, serial: str) -> list | None:
     """
     Get status of individual camera
     :param conn: DB Connection object
@@ -214,7 +210,7 @@ def query_camera_status(conn, serial):
     return camera_status if len(camera_status) > 0 else None
 
 
-def query_switch_connection(conn, serial):
+def query_switch_connection(conn: sqlite3.Connection, serial: str) -> list | None:
     """
     Get connection for individual switch
     :param conn: DB Connection object
@@ -233,7 +229,7 @@ def query_switch_connection(conn, serial):
     return connection if len(connection) > 0 else None
 
 
-def query_camera_connection(conn, serial):
+def query_camera_connection(conn: sqlite3.Connection, serial: str) -> list | None:
     """
     Get connection for individual camera
     :param conn: DB Connection object
@@ -252,7 +248,7 @@ def query_camera_connection(conn, serial):
     return connection if len(connection) > 0 else None
 
 
-def update_device_status(conn, device_type, serial, status):
+def update_device_status(conn: sqlite3.Connection, device_type: str, serial: str, status: str):
     """
     Update status of device
     :param conn: DB Connection object
@@ -277,7 +273,7 @@ def update_device_status(conn, device_type, serial, status):
     conn.commit()
 
 
-def query_specific_switch(conn, serial):
+def query_specific_switch(conn: sqlite3.Connection, serial: str) -> list:
     """
     Return specific switch via serial number
     :param conn: DB Connection object
@@ -296,7 +292,7 @@ def query_specific_switch(conn, serial):
     return switch
 
 
-def query_specific_router(conn, serial):
+def query_specific_router(conn: sqlite3.Connection, serial: str) -> list:
     """
     Return specific router via serial number
     :param conn: DB Connection object
@@ -315,7 +311,7 @@ def query_specific_router(conn, serial):
     return router
 
 
-def query_specific_snow_ticket(conn, serial):
+def query_specific_snow_ticket(conn: sqlite3.Connection, serial: str) -> list:
     """
     Return specific SNOW ticket associated with device serial number
     :param conn: DB Connection object
@@ -331,7 +327,7 @@ def query_specific_snow_ticket(conn, serial):
     return ticket
 
 
-def query_connected_switches_to_router(conn, serial):
+def query_connected_switches_to_router(conn: sqlite3.Connection, serial: str) -> list:
     """
     Return downstream switches connected to router
     :param conn: DB Connection object
@@ -350,7 +346,7 @@ def query_connected_switches_to_router(conn, serial):
     return switches
 
 
-def query_connected_cameras_to_switches(conn, serial):
+def query_connected_cameras_to_switches(conn: sqlite3.Connection, serial: str) -> list:
     """
     Return downstream cameras connected to switch
     :param conn: DB Connection object
@@ -369,7 +365,7 @@ def query_connected_cameras_to_switches(conn, serial):
     return cameras
 
 
-def add_router(conn, serial, status):
+def add_router(conn: sqlite3.Connection, serial: str, status: str):
     """
     Add new router or update existing router in DB
     :param conn: DB Connection object
@@ -385,9 +381,10 @@ def add_router(conn, serial, status):
     conn.commit()
 
 
-def add_switch(conn, serial, status, connection=None):
+def add_switch(conn: sqlite3.Connection, serial: str, status: str, connection=None):
     """
     Add new switch or update existing switch in DB
+    :param connection: Upstream MX connection
     :param conn: DB Connection object
     :param serial: New switch serial
     :param status: Switch current status
@@ -406,9 +403,10 @@ def add_switch(conn, serial, status, connection=None):
     conn.commit()
 
 
-def add_camera(conn, serial, status, connection=None):
+def add_camera(conn: sqlite3.Connection, serial: str, status: str, connection=None):
     """
     Add new camera or update existing camera in DB
+    :param connection: Upstream switch connection
     :param conn: DB Connection object
     :param serial: New camera serial
     :param status: Camera current status
@@ -427,7 +425,7 @@ def add_camera(conn, serial, status, connection=None):
     conn.commit()
 
 
-def add_snow_ticket(conn, serial, incident_sys_id):
+def add_snow_ticket(conn: sqlite3.Connection, serial: str, incident_sys_id: str):
     """
     Add new SNOW ticket or update existing SNOW Ticket in DB
     :param conn: DB Connection object
@@ -442,7 +440,7 @@ def add_snow_ticket(conn, serial, incident_sys_id):
     conn.commit()
 
 
-def delete_switch(conn, serial):
+def delete_switch(conn: sqlite3.Connection, serial: str):
     """
     Delete switch from DB
     :param conn: DB Connection object
@@ -456,7 +454,7 @@ def delete_switch(conn, serial):
     conn.commit()
 
 
-def delete_router(conn, serial):
+def delete_router(conn: sqlite3.Connection, serial: str):
     """
     Delete router from DB
     :param conn: DB Connection object
@@ -470,7 +468,7 @@ def delete_router(conn, serial):
     conn.commit()
 
 
-def delete_camera(conn, serial):
+def delete_camera(conn: sqlite3.Connection, serial: str):
     """
     Delete camera from DB
     :param conn: DB Connection object
@@ -484,7 +482,7 @@ def delete_camera(conn, serial):
     conn.commit()
 
 
-def delete_snow_ticket(conn, serial):
+def delete_snow_ticket(conn: sqlite3.Connection, serial: str):
     """
     Delete SNOW Ticket from DB
     :param conn: DB Connection object
@@ -498,7 +496,7 @@ def delete_snow_ticket(conn, serial):
     conn.commit()
 
 
-def close_connection(conn):
+def close_connection(conn: sqlite3.Connection):
     """
     Close DB Connection
     :param conn: DB Connection

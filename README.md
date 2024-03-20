@@ -110,11 +110,7 @@ This feature stops duplicate tickets from being created for an MV Camera with an
 ## Installation/Configuration
 1. Clone this repository with `git clone [repository name]`
 2. Rename the `.env_sample` file to `.env`. This file holds sensitive environment variables which will be passed to the docker container securely. Rename `config_sample.py` to `config.py` (located at: `flask_app/config_sample.py`).
-3. Add Meraki API key and Webhook Shared Secret  (`.env`), and CSV File Path for Ticket information (`flask_app/config.py`) to environment variables. The CSV File is a backup of ticket information for manual ServiceNow ticket creation.
-```python
-# config.py
-TICKET_CSV_PATH = ""
-```
+3. Add Meraki API key and Webhook Shared Secret  (`.env`).
 ```python
 # .env
 MERAKI_API_KEY="<replace>"
@@ -196,7 +192,7 @@ A Ticket is created in ServiceNow if the troubleshooting process is unable to re
 
 ![](IMAGES/snow_ticket.png)
 
-The ticket content is written to a CSV File specified in `config.py` as well.
+The ticket content is written to a CSV File as a backup. A new CSV file is created every week in `/flask_app/csv_reports` with a week and year stamp containing the entries for that week.
 
 ![](IMAGES/csv_report.png)
 

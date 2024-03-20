@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copyright (c) 2023 Cisco and/or its affiliates.
+Copyright (c) 2024 Cisco and/or its affiliates.
 This software is licensed to you under the terms of the Cisco Sample
 Code License, Version 1.1 (the "License"). You may obtain a copy of the
 License at
@@ -14,7 +14,7 @@ or implied.
 """
 
 __author__ = "Trevor Maco <tmaco@cisco.com>"
-__copyright__ = "Copyright (c) 2023 Cisco and/or its affiliates."
+__copyright__ = "Copyright (c) 2024 Cisco and/or its affiliates."
 __license__ = "Cisco Sample Code License, Version 1.1"
 
 import os
@@ -98,7 +98,7 @@ def clear_stale_devices():
             db.delete_router(conn, serial)
 
 
-def thread_wrapper(net, mac_to_serial, serial_to_model, serial_to_status):
+def thread_wrapper(net: dict, mac_to_serial: dict, serial_to_model: dict, serial_to_status: dict):
     """
     Thread for processing the topology of each network (devices, links, connections, etc.).
     If a valid topological connection is found, add it to the DB.
@@ -236,7 +236,7 @@ def thread_wrapper(net, mac_to_serial, serial_to_model, serial_to_status):
     console.print(f"Processed the following connection(s): {processed_connections}")
 
 
-def update_network_topology(org_id, net):
+def update_network_topology(org_id: str, net: dict):
     """
     Rerun Topology calculations on a specific network (obtain org structures, rebuild topology if necessary)
     :param org_id: Org ID
@@ -355,7 +355,7 @@ def build_full_topology():
     print_table('camera')
 
 
-def print_table(table):
+def print_table(table: str):
     """
     Print contents of specified table (useful for debugging and replacing camera serials)
     :param table: Table name from CLI args (options: camera, switch, router)

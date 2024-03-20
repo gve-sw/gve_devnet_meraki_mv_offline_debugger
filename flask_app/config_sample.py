@@ -1,6 +1,3 @@
-# Meraki API Configs (see README.md)
-TICKET_CSV_PATH = ""
-
 # ServiceNow Section
 SERVICE_NOW_ENABLED = True
 

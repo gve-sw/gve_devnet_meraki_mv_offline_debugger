@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copyright (c) 2023 Cisco and/or its affiliates.
+Copyright (c) 2024 Cisco and/or its affiliates.
 This software is licensed to you under the terms of the Cisco Sample
 Code License, Version 1.1 (the "License"). You may obtain a copy of the
 License at
@@ -14,7 +14,7 @@ or implied.
 """
 
 __author__ = "Trevor Maco <tmaco@cisco.com>"
-__copyright__ = "Copyright (c) 2023 Cisco and/or its affiliates."
+__copyright__ = "Copyright (c) 2024 Cisco and/or its affiliates."
 __license__ = "Cisco Sample Code License, Version 1.1"
 
 import csv
@@ -22,6 +22,7 @@ import datetime
 import json
 import logging
 import os
+import sqlite3
 import time
 from logging.handlers import RotatingFileHandler
 
@@ -54,17 +55,19 @@ SERVICENOW_INSTANCE = os.getenv('SERVICENOW_INSTANCE')
 SERVICENOW_USERNAME = os.getenv('SERVICENOW_USERNAME')
 SERVICENOW_PASSWORD = os.getenv('SERVICENOW_PASSWORD')
 
+# Absolute Paths
+script_dir = os.path.dirname(os.path.abspath(__file__))
+logs_path = os.path.join(script_dir, 'logs')
+csv_reports_path = os.path.join(script_dir, 'csv_reports')
+
 # Meraki Dashboard Instance
-dashboard = meraki.DashboardAPI(api_key=MERAKI_API_KEY, suppress_logging=True, maximum_retries=5)
+dashboard = meraki.DashboardAPI(api_key=MERAKI_API_KEY, suppress_logging=True, maximum_retries=25)
 
 # Global Variables
 DELAY_TIME = 5  # time to wait (minute) between polls (a value of 0 skips sleeping)
 
 # Rich Console Instance
 console = Console()
-
-# Custom logger section
-FORMATTER = logging.Formatter('%(asctime)s [%(levelname)s]: %(message)s')
 
 # Scheduler Section
 scheduler = BackgroundScheduler()
@@ -77,20 +80,21 @@ scheduler.add_job(populate.clear_stale_devices, 'interval', minutes=65)
 TICKET_REMOVAL_TIME = 1  # time to wait (hours) to check if a device is active and a ticket is stale
 
 
-def custom_logger(serial):
+def custom_logger(serial: str) -> logging.Logger:
     """
     Define custom logger for each celery task, writes logs to serial stamped file. Creates or returns existing logger
     :param serial: Webhook device serial
     :return: logger instance
     """
     logger = logging.getLogger(serial)
+    formatter = logging.Formatter('%(asctime)s [%(levelname)s]: %(message)s')
 
     if not logger.handlers:
-        logFile = os.path.join('logs/', serial + '.log')
+        logFile = os.path.join(logs_path, serial + '.log')
 
         # Current log policies: 5 MB max size
         my_handler = RotatingFileHandler(logFile, mode='a', maxBytes=5 * 1024 * 1024)
-        my_handler.setFormatter(FORMATTER)
+        my_handler.setFormatter(formatter)
         my_handler.setLevel(logging.INFO)
 
         logger.addHandler(my_handler)
@@ -100,18 +104,19 @@ def custom_logger(serial):
     return logger
 
 
-def run_stamp(serial):
+def run_stamp(serial: str):
     """
     Initial meta data for each run, appended to device log file
     :param serial: Webhook device serial
-    :return:
     """
-    with open(f'logs/{serial}.log', 'a') as fp:
+    logFile = os.path.join(logs_path, serial + '.log')
+
+    with open(logFile, 'a') as fp:
         fp.write(f'**************************** New Run: {serial} **************************************************\n')
         fp.write(f'**************************** Time Stamp: {datetime.datetime.now()} ****************************\n')
 
 
-def find_switchport(switch_serial, camera_mac):
+def find_switchport(switch_serial: str, camera_mac: str) -> tuple[str | None, str | None]:
     """
     Find switch-port on connected switch that the camera is connected to, supports same or cross network
     :param switch_serial: Switch Serial, used for checking port CDP/LLDP information
@@ -144,7 +149,7 @@ def find_switchport(switch_serial, camera_mac):
     return None, None
 
 
-def find_switchport_status(switch_serial, switch_port):
+def find_switchport_status(switch_serial: str, switch_port: str) -> tuple[list | None, list | None]:
     """
     Return switchport status (warnings and errors) after debug routine, help illuminate underlying errors
     :param switch_serial: MS Serial
@@ -166,7 +171,7 @@ def find_switchport_status(switch_serial, switch_port):
 
 
 @celery.task
-def debug_mv_camera(org_id, serial, camera_name, switch_serial):
+def debug_mv_camera(org_id: str, serial: str, camera_name: str, switch_serial: str) -> dict:
     """
     Trigger primary debugging workflow for MV camera, the steps are outlined in the README
     :param org_id: Org ID
@@ -247,7 +252,7 @@ def debug_mv_camera(org_id, serial, camera_name, switch_serial):
             "switch_port_status": {"errors": errors, "warnings": warnings}}
 
 
-def find_impacted_cameras(serial, starting_point, conn):
+def find_impacted_cameras(serial: str, starting_point: str, conn: sqlite3.Connection) -> list:
     """
     Find cameras impacted by MX or MS outage based on DB Topology, include these in the Ticket output
     :param conn: DB Connection Object
@@ -285,7 +290,7 @@ def find_impacted_cameras(serial, starting_point, conn):
     return impacted_cameras
 
 
-def generate_ticket_data(processing_data, webhook_data, conn):
+def generate_ticket_data(processing_data: dict, webhook_data: dict, conn: sqlite3.Connection) -> dict | None:
     """
     Generate Ticket Data (local CSV logging, ServiceNow Tickets)
     :param conn: DB Connection Object
@@ -380,21 +385,25 @@ def generate_ticket_data(processing_data, webhook_data, conn):
     return ticket_data
 
 
-def log_ticket_information(ticket_data, webhook_data):
+def log_ticket_information(ticket_data: dict, webhook_data: dict):
     """
     Log relevant ServiceNow ticket information to CSV file
     :param ticket_data: Data returned from debugging workflow, processed
     :param webhook_data: Webhook information returned from Meraki
-    :return:
     """
     l = custom_logger(webhook_data['deviceSerial'])
     l.info(f'Logging {webhook_data} to CSV file')
 
+    # Determine the current week number
+    current_week = datetime.datetime.now().strftime("%Y-W%U")
+    file_name = f"week_{current_week}.csv"
+    file_path = os.path.join(csv_reports_path, file_name)
+
     # Update occurrences if a matching row is found
-    rows = update_occurrences(config.TICKET_CSV_PATH, ticket_data)
+    rows = update_occurrences(file_path, ticket_data)
 
     # Write ticket information to csv file
-    with open(config.TICKET_CSV_PATH, 'w') as csvfile:
+    with open(file_path, 'w') as csvfile:
         fieldnames = ['Most Recent Timestamp', 'Occurrences', 'Alert Type', 'Network', 'Affected Device Type',
                       'Affected Device Name', 'Affected Device Serial', 'Impacted Camera Name(s)',
                       'Impacted Camera Serial(s)', 'Upstream Switch Serial', 'Upstream Switch Name',
@@ -406,7 +415,7 @@ def log_ticket_information(ticket_data, webhook_data):
         writer.writerows(rows)
 
 
-def update_occurrences(csvfile, ticket_data):
+def update_occurrences(csvfile: str, ticket_data: dict) -> list:
     """
     Search through CSV rows, find a matching tick entry (all fields except time stamp must match!) - increase occurrence counter by 1
     :param csvfile: CSV file path
@@ -438,14 +447,13 @@ def update_occurrences(csvfile, ticket_data):
     return rows
 
 
-def service_now_ticket_cleanup(org_id, serial, snow_sys_id):
+def service_now_ticket_cleanup(org_id: str, serial: str, snow_sys_id: str):
     """
     Check if device is currently online (this means the ticket is old, and should be removed, or there are newer
     tickets if the device 'flapped')
     :param org_id: Meraki Org ID
     :param serial: Meraki Device Serial (Associated with SNOW Ticket)
     :param snow_sys_id: SNOW Unique Ticket ID
-    :return:
     """
     response = dashboard.organizations.getOrganizationDevicesStatuses(org_id, serials=[serial])
     status = response[0]['status']
@@ -496,12 +504,11 @@ def service_now_ticket_cleanup(org_id, serial, snow_sys_id):
 
 
 @celery.task
-def create_service_now_ticket(processing_data, webhook_data):
+def create_service_now_ticket(processing_data: dict, webhook_data: dict):
     """
     Create ServiceNow Ticket, include webhook and troubleshooting result data, log ticket data to CSV
     :param processing_data: Troubleshooting results (if applicable)
     :param webhook_data: Webhook data
-    :return:
     """
     conn = db.create_connection("sqlite.db")
 
