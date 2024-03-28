@@ -21,7 +21,7 @@ import os
 from rich.console import Console
 from rich.panel import Panel
 from dotenv import load_dotenv
-import threading
+from concurrent.futures import ThreadPoolExecutor
 import argparse
 
 import meraki
@@ -275,9 +275,8 @@ def update_network_topology(org_id: str, net: dict):
     console.print(f"\nUpdating topology for network: {net['name']}")
 
     # Spawn a background thread to process network
-    thread = threading.Thread(target=thread_wrapper,
-                              args=(net, mac_to_serial, serial_to_model, serial_to_status,))
-    thread.start()
+    with ThreadPoolExecutor() as executor:
+        future = executor.submit(thread_wrapper, net, mac_to_serial, serial_to_model, serial_to_status)
 
 
 def build_full_topology():
@@ -332,20 +331,10 @@ def build_full_topology():
             f"\nProcessing the following networks: {[network['name'] for network in networks]}")
         console.print(f"Total Networks to process: {len(networks)}")
 
-        threads = []
-        for net in networks:
-            # Spawn a background thread
-            thread = threading.Thread(target=thread_wrapper,
-                                      args=(net, mac_to_serial, serial_to_model, serial_to_status,))
-            threads.append(thread)
-
-        # Start all threads
-        for t in threads:
-            t.start()
-
-        # Wait for all threads to finish
-        for t in threads:
-            t.join()
+        max_threads = 20
+        with ThreadPoolExecutor(max_workers=max_threads) as executor:
+            futures = [executor.submit(thread_wrapper, net, mac_to_serial, serial_to_model, serial_to_status) for net in
+                       networks]
 
     # Print the results of all the queries to all the tables
     console.print(Panel.fit("Aggregate Table Output:"))
