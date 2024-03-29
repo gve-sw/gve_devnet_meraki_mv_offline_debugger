@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 import argparse
 
 import meraki
+from rich.progress import Progress
 
 import config
 import db
@@ -286,55 +287,72 @@ def build_full_topology():
     """
     # Iterate through every org, every network, build topology information
     orgs = dashboard.organizations.getOrganizations()
-    for org in orgs:
-        console.print(Panel.fit(f"Processing Org: {org['name']}"))
-        org_id = org["id"]
 
-        try:
-            networks = dashboard.organizations.getOrganizationNetworks(org_id, total_pages="all")
-        except meraki.APIError as e:
-            continue
+    # Global structures here, handles across orgs as well
+    mac_to_serial = {}
+    serial_to_model = {}
+    serial_to_status = {}
+    all_networks = []
 
-        # Optional: filter out the specific networks from the list
-        if len(config.TARGET_NETWORKS) > 0:
-            networks = [entry for entry in networks if entry['name'] in config.TARGET_NETWORKS]
-            networks_ids = [entry['id'] for entry in networks if entry['name'] in config.TARGET_NETWORKS]
+    with Progress() as progress:
+        overall_progress = progress.add_task("Overall Progress", total=len(orgs), transient=True)
+        counter = 1
 
-            # No matching networks in org found, skip
-            if len(networks) == 0:
+        for org in orgs:
+            progress.console.print(
+                "Processing Site: [blue]'{}'[/] ({} of {})".format(org['name'], str(counter), len(orgs)))
+            org_id = org["id"]
+
+            try:
+                networks = dashboard.organizations.getOrganizationNetworks(org_id, total_pages="all")
+            except meraki.APIError as e:
+                counter += 1
+                progress.update(overall_progress, advance=1)
                 continue
 
-        # Get Org Devices, build mac to serial dictionary, serial to model dictionary (chain of dictionaries!)
-        if len(config.TARGET_NETWORKS) > 0:
-            devices = dashboard.organizations.getOrganizationDevices(org_id, total_pages='all', networkIds=networks_ids)
-        else:
-            devices = dashboard.organizations.getOrganizationDevices(org_id, total_pages='all')
+            # Optional: filter out the specific networks from the list
+            if len(config.TARGET_NETWORKS) > 0:
+                networks = [entry for entry in networks if entry['name'] in config.TARGET_NETWORKS]
+                networks_ids = [entry['id'] for entry in networks if entry['name'] in config.TARGET_NETWORKS]
 
-        mac_to_serial = {}
-        serial_to_model = {}
-        for device in devices:
-            mac_to_serial[device["mac"]] = device["serial"]
-            serial_to_model[device['serial']] = device['model']
+                # No matching networks in org found, skip
+                if len(networks) == 0:
+                    continue
 
-        # Get Org Device Statuses, build serial to status dictionary
-        if len(config.TARGET_NETWORKS) > 0:
-            device_statuses = dashboard.organizations.getOrganizationDevicesStatuses(org_id, total_pages='all',
-                                                                                     networkIds=networks_ids)
-        else:
-            device_statuses = dashboard.organizations.getOrganizationDevicesStatuses(org_id, total_pages='all')
+            # Add to Global Networks list
+            all_networks += networks
 
-        serial_to_status = {}
-        for status in device_statuses:
-            serial_to_status[status["serial"]] = status["status"]
+            # Get Org Devices, build mac to serial dictionary, serial to model dictionary (chain of dictionaries!)
+            if len(config.TARGET_NETWORKS) > 0:
+                devices = dashboard.organizations.getOrganizationDevices(org_id, total_pages='all', networkIds=networks_ids)
+            else:
+                devices = dashboard.organizations.getOrganizationDevices(org_id, total_pages='all')
 
-        console.print(
-            f"\nProcessing the following networks: {[network['name'] for network in networks]}")
-        console.print(f"Total Networks to process: {len(networks)}")
+            for device in devices:
+                mac_to_serial[device["mac"]] = device["serial"]
+                serial_to_model[device['serial']] = device['model']
 
-        max_threads = 20
-        with ThreadPoolExecutor(max_workers=max_threads) as executor:
-            futures = [executor.submit(thread_wrapper, net, mac_to_serial, serial_to_model, serial_to_status) for net in
-                       networks]
+            # Get Org Device Statuses, build serial to status dictionary
+            if len(config.TARGET_NETWORKS) > 0:
+                device_statuses = dashboard.organizations.getOrganizationDevicesStatuses(org_id, total_pages='all',
+                                                                                         networkIds=networks_ids)
+            else:
+                device_statuses = dashboard.organizations.getOrganizationDevicesStatuses(org_id, total_pages='all')
+
+            for status in device_statuses:
+                serial_to_status[status["serial"]] = status["status"]
+
+            counter += 1
+            progress.update(overall_progress, advance=1)
+
+    console.print(
+        f"\nProcessing the following networks: {[network['name'] for network in all_networks]}")
+    console.print(f"Total Networks to process: {len(all_networks)}")
+
+    max_threads = 20
+    with ThreadPoolExecutor(max_workers=max_threads) as executor:
+        futures = [executor.submit(thread_wrapper, net, mac_to_serial, serial_to_model, serial_to_status) for net in
+                   all_networks]
 
     # Print the results of all the queries to all the tables
     console.print(Panel.fit("Aggregate Table Output:"))

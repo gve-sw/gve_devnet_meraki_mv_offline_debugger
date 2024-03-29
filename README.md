@@ -24,6 +24,8 @@ If an alert is generated for an MX or MS device which affects an MV Camera, the 
 **Note**:
 This code works best with the topology `MX -> MS -> MV`. If the environment doesn't have this topology, there may be issues creating tickets. The intelligent ticket creation depends on the order of alerts and this topology. For ex: an MX alert should come in first before the affected MS and MV devices. The order is usually right, but it can be unpredictable. To guarantee correct behavior, see the `Meraki Alerts` section.
 
+The code supports the MX, MS, and/or MV being in **separate networks** as well as **separate organizations**.
+
 ## Contacts
 * Trevor Maco
 
